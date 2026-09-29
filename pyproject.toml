@@ -1,0 +1,24 @@
+[project]
+name = "mv-kit"
+version = "0.1.0"
+description = "Code-rendered, beat- and lyric-synced music videos"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.26",
+  "scipy>=1.11",
+  "pillow>=10",
+  "playwright>=1.45",
+]
+
+[project.optional-dependencies]
+# Whisper word timestamps for align_lyrics.py (any OS; CPU or CUDA)
+align = ["faster-whisper>=1.1"]
+# Whisper on Apple Silicon (faster on a Mac): uv run --extra mlx analysis/align_lyrics.py …
+mlx = ["mlx-whisper>=0.4; sys_platform == 'darwin' and platform_machine == 'arm64'"]
+# Stem separation for separate.py (Demucs; downloads torch)
+stems = ["demucs>=4.0.1", "torchaudio>=2.1", "soundfile>=0.12"]
+# QA plots (analyze_audio.py --plot)
+plot = ["matplotlib>=3.8"]
+
+[tool.uv]
+package = false

@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+projects/*/out/
+projects/*/stems/
+projects/*/data/whisper_words.json
+projects/*/data/audio_qa.png
+.DS_Store
+
+# Songs and their full lyrics belong to their authors. Keep them on your own machine only:
+# copy the song into projects/<name>/audio/ and write projects/<name>/lyrics.txt locally.
+projects/*/audio/
+projects/yuai/lyrics.txt
+projects/yuai/data/lyrics.js
+projects/yuai/data/lyrics.json
+projects/yuai/data/lyrics_fix.json
+projects/yuai/data/lyrics_report.txt

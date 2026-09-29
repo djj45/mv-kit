@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>歌词校准</title>
+<style>
+  :root { --bg:#121017; --panel:#1c1924; --line:#2c2838; --text:#e9e6f2; --dim:#9a94ad; --sel:#4fd6ff; --auto:#ff9f43; --fixed:#5ee08a; --dirty:#ffd54a; }
+  * { box-sizing:border-box; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--text); font:13px/1.4 -apple-system, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; overflow:hidden; }
+  #bar { height:46px; display:flex; align-items:center; gap:10px; padding:0 12px; background:var(--panel); border-bottom:1px solid var(--line); }
+  #bar b { font-size:14px; white-space:nowrap; }
+  #bar .sp { flex:1; }
+  .grp { display:flex; align-items:center; gap:4px; color:var(--dim); white-space:nowrap; }
+  button, select { background:#2a2635; color:var(--text); border:1px solid #3a3548; border-radius:6px; padding:4px 9px; font:inherit; cursor:pointer; }
+  button:hover { border-color:#5a5470; }
+  button.on { background:#34506a; border-color:var(--sel); }
+  #saveBtn { background:#2e4a36; border-color:#4c8a5c; }
+  #saveBtn.pending { background:#5a4a1c; border-color:var(--dirty); }
+  select { max-width:340px; }
+  #status { color:var(--dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:420px; }
+  #info { height:28px; display:flex; align-items:center; gap:18px; padding:0 12px; color:var(--dim); border-bottom:1px solid var(--line); white-space:nowrap; overflow:hidden; }
+  #info .cur { color:var(--text); }
+  .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin:0 4px 0 10px; vertical-align:-1px; }
+  #cv { display:block; cursor:default; }
+  #help { position:absolute; left:0; right:0; bottom:0; height:30px; display:flex; align-items:center; padding:0 12px; gap:14px; color:var(--dim); background:var(--panel); border-top:1px solid var(--line); white-space:nowrap; overflow:hidden; }
+  #help kbd { color:var(--text); background:#2a2635; border:1px solid #3a3548; border-bottom-width:2px; border-radius:4px; padding:0 5px; font:12px ui-monospace, Menlo, monospace; }
+  #help .rule { color:var(--sel); margin-left:auto; }
+  #log { position:absolute; right:16px; top:84px; width:560px; max-height:60%; overflow:auto; background:#0b0a0f; border:1px solid var(--line); border-radius:8px; padding:10px 12px; font:12px/1.5 ui-monospace, Menlo, monospace; white-space:pre-wrap; display:none; }
+  #busy { position:absolute; inset:74px 0 30px 0; display:flex; align-items:center; justify-content:center; color:var(--dim); font-size:15px; background:rgba(18,16,23,.85); }
+</style>
+</head>
+<body>
+<div id="bar">
+  <b id="title">歌词校准</b>
+  <select id="lineSel" title="跳到某一句"></select>
+  <span class="grp">速度 <button data-sp="1" class="on">1×</button><button data-sp="0.75">0.75×</button><button data-sp="0.5">0.5×</button></span>
+  <button id="loopBtn" title="L">循环</button>
+  <span class="grp" id="srcGrp"></span>
+  <span class="grp">缩放 <button id="zo">−</button><button id="zi">+</button></span>
+  <span class="sp"></span>
+  <span id="status"></span>
+  <button id="audioBtn" title="声音没了就点这里：重建音频通道">🔊 音频</button>
+  <button id="logBtn" title="上次对齐脚本的输出">日志</button>
+  <button id="saveBtn" title="⌘S / Ctrl+S">保存到 lyrics_fix.json</button>
+</div>
+<div id="info"><span class="cur" id="curInfo">—</span><span id="hoverInfo"></span><span style="margin-left:auto">
+  <span class="dot" style="background:var(--auto)"></span>自动推算（待查）<span class="dot" style="background:#d8d4e8"></span>Whisper 识别
+  <span class="dot" style="background:var(--fixed)"></span>已校准<span class="dot" style="background:var(--dirty)"></span>未保存<span class="dot" style="background:var(--sel)"></span>当前</span></div>
+<canvas id="cv"></canvas>
+<div id="help">
+  <span><kbd>空格</kbd> 播放两线之间</span><span><kbd>⇧</kbd>+<kbd>空格</kbd> 标记前 0.6 s</span><span><kbd>L</kbd> 循环</span><span><kbd>回车</kbd> 整句</span>
+  <span><kbd>←</kbd><kbd>→</kbd> 选字</span><span><kbd>,</kbd><kbd>.</kbd> 微调 10 ms（<kbd>⇧</kbd> 50 ms）</span><span><kbd>A</kbd> 吸附起音</span>
+  <span><kbd>T</kbd> 播放中打点</span><span><kbd>C</kbd> 确认无误</span><span><kbd>⌫</kbd> 还原自动</span><span><kbd>N</kbd> 下一个待查</span><span><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 速度</span>
+  <span><kbd>⌘</kbd>/<kbd>Ctrl</kbd>+滚轮 缩放</span><span><kbd>⌘Z</kbd> 撤销</span><span><kbd>⌘S</kbd> 保存</span>
+  <span class="rule">原则：竖线对准歌手刚发声的瞬间</span>
+</div>
+<div id="log"></div>
+<div id="busy">载入中…</div>
+<script>
+'use strict';
+const $ = s => document.querySelector(s);
+const cv = $('#cv'), g = cv.getContext('2d');
+const COL = { sel: '#4fd6ff', auto: '#ff9f43', fixed: '#5ee08a', dirty: '#ffd54a', whisper: '#d8d4e8' };
+const K = (li, wi) => li + ':' + wi;
+const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+const fmt = t => { const m = Math.floor(t / 60), s = t - m * 60; return `${m}:${s.toFixed(2).padStart(5, '0')}`; };
+
+let P = {}, spec = null, tiles = [], onset = null, beats = { beats: [], downbeats: [] };
+let lines = [], flat = [], saved = new Map(), removals = new Set(), undo = [];
+let sel = 0, t0 = 0, pps = 260, speed = 1, loop = false, src = 'mix';
+let actx = null, buf = null, play = null, hoverX = null, drag = null, lastLog = '';
+let Wc = 0, Hc = 0, RUL = 22, ON = 54, LY = 104, specTop = 22, specH = 0, onTop = 0, lyTop = 0;
+
+const X = t => (t - t0) * pps, T = x => t0 + x / pps;
+const status = s => { $('#status').textContent = s; };
+
+// ------------------------------------------------------------------ loading
+async function j(u, o) { const r = await fetch(u, o); if (!r.ok) throw new Error(`${u}: ${r.status}`); return r.json(); }
+async function init() {
+  P = await j('/api/project');
+  document.title = `歌词校准 · ${P.title}`; $('#title').textContent = `歌词校准 · ${P.title}`;
+  beats = await j('/api/beats');
+  $('#srcGrp').innerHTML = P.sources.length > 1 ? '频谱 ' + P.sources.map(s => `<button data-src="${s}">${s === 'mix' ? '混音' : '人声分轨'}</button>`).join('') : '';
+  document.querySelectorAll('[data-src]').forEach(b => b.onclick = () => loadSource(b.dataset.src));
+  await loadLyrics();
+  await loadSource(P.sources.includes('vocals') ? 'vocals' : 'mix');
+  const first = flat.findIndex(c => c.start >= (P.from || 0) - 0.01);
+  select(first < 0 ? 0 : first, true);
+  $('#busy').style.display = 'none';
+}
+async function loadLyrics() {
+  const keep = flat[sel] ? K(flat[sel].li, flat[sel].wi) : null;
+  const doc = await j('/api/lyrics'), fx = await j('/api/fixes');
+  saved = new Map(fx.map(f => [K(f.line, f.word), f]));
+  lines = doc.lines || [];
+  flat = [];
+  lines.forEach((l, li) => l.words.forEach((w, wi) => flat.push({
+    li, wi, w: w.w, start: w.start, end: w.end, conf: w.conf ?? 1, fixed: saved.has(K(li, wi)),
+    dirty: false, endDirty: false, confirmed: false, reverted: false, last: wi === l.words.length - 1 })));
+  $('#lineSel').innerHTML = lines.map((l, li) => `<option value="${li}">${fmt(l.start)}  ${l.text}</option>`).join('');
+  const k = keep && flat.findIndex(c => K(c.li, c.wi) === keep);
+  if (k != null && k >= 0) sel = k;
+  refreshSave(); draw();
+}
+async function loadSource(s) {
+  $('#busy').style.display = 'flex'; $('#busy').textContent = '计算频谱、解码音频…（第一次会慢一点）';
+  stop(); src = s;
+  document.querySelectorAll('[data-src]').forEach(b => b.classList.toggle('on', b.dataset.src === s));
+  spec = await j('/api/spec/' + s);
+  onset = Uint8Array.from(atob(spec.onset), ch => ch.charCodeAt(0));
+  tiles = await Promise.all([...Array(spec.tiles).keys()].map(k => new Promise((res, rej) => {
+    const im = new Image(); im.onload = () => res(im); im.onerror = rej; im.src = `/spec/${s}/${k}.png?v=${encodeURIComponent(spec.stamp)}`; })));
+  if (!actx) newAudio();
+  const ab = await (await fetch('/wav/' + s)).arrayBuffer();
+  buf = await actx.decodeAudioData(ab);
+  $('#busy').style.display = 'none';
+  draw();
+}
+
+// ------------------------------------------------------------------ layout & drawing
+function resize() {
+  const dpr = devicePixelRatio || 1;
+  Wc = innerWidth; Hc = innerHeight - 46 - 28 - 30;
+  cv.width = Wc * dpr; cv.height = Hc * dpr; cv.style.width = Wc + 'px'; cv.style.height = Hc + 'px';
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  specTop = RUL; specH = Math.max(120, Hc - RUL - ON - LY); onTop = specTop + specH; lyTop = onTop + ON;
+  draw();
+}
+const segEnd = i => { const c = flat[i], n = flat[i + 1]; return n && n.li === c.li ? n.start : c.end; };
+function colorOf(c, i) {
+  if (i === sel) return COL.sel;
+  if (c.dirty || c.endDirty || c.confirmed || c.reverted) return COL.dirty;
+  if (c.fixed) return COL.fixed;
+  return c.conf < 0.5 ? COL.auto : COL.whisper;
+}
+function pos() { return play ? Math.min(play.to, play.from + (actx.currentTime - play.at) * speed) : null; }
+
+function draw() {
+  if (!Wc) return;
+  g.fillStyle = '#121017'; g.fillRect(0, 0, Wc, Hc);
+  const ta = t0, tb = T(Wc);
+  // spectrogram
+  if (spec) {
+    const fps = spec.fps, c0 = Math.max(0, Math.floor(ta * fps)), c1 = Math.min(spec.cols, Math.ceil(tb * fps) + 1);
+    g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
+    tiles.forEach((im, k) => {
+      const a = k * spec.chunk, b = a + im.width, lo = Math.max(c0, a), hi = Math.min(c1, b);
+      if (hi <= lo) return;
+      g.drawImage(im, lo - a, 0, hi - lo, spec.rows, X(lo / fps), specTop, (hi - lo) / fps * pps, specH);
+    });
+    // frequency guides
+    g.fillStyle = 'rgba(255,255,255,0.35)'; g.font = '10px ui-monospace, Menlo, monospace';
+    [100, 250, 500, 1000, 2000, 4000].forEach(f => { const y = specTop + specH * (1 - Math.log(f / spec.fmin) / Math.log(spec.fmax / spec.fmin)); g.fillRect(0, y, 6, 1); g.fillText(f >= 1000 ? f / 1000 + 'k' : f, 8, y + 3); });
+    // onset curve
+    g.fillStyle = '#17141e'; g.fillRect(0, onTop, Wc, ON);
+    g.beginPath(); g.moveTo(X(c0 / fps), onTop + ON);
+    const step = Math.max(1, Math.floor(fps / pps / 1.5));
+    for (let c = c0; c < c1; c += step) g.lineTo(X(c / fps), onTop + ON - 2 - (onset[c] / 255) * (ON - 6));
+    g.lineTo(X((c1 - 1) / fps), onTop + ON); g.closePath();
+    g.fillStyle = 'rgba(127,209,255,0.35)'; g.fill(); g.strokeStyle = 'rgba(127,209,255,0.8)'; g.lineWidth = 1; g.stroke();
+    g.fillStyle = 'rgba(255,255,255,0.35)'; g.fillText('起音', 8, onTop + 12);
+  }
+  // outside the project's range
+  g.fillStyle = 'rgba(0,0,0,0.45)';
+  if (P.from > ta) g.fillRect(0, specTop, X(P.from), Hc - specTop);
+  if (P.to && P.to < tb) g.fillRect(X(P.to), specTop, Wc - X(P.to), Hc - specTop);
+  // beat grid
+  const db = new Set(beats.downbeats.map(v => v.toFixed(3)));
+  for (const b of beats.beats) { if (b < ta || b > tb) continue; const x = X(b), d = db.has(b.toFixed(3)); g.fillStyle = d ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.08)'; g.fillRect(x, specTop, 1, specH + ON); }
+  // ruler
+  g.fillStyle = '#1c1924'; g.fillRect(0, 0, Wc, RUL);
+  const minor = pps > 400 ? 0.05 : pps > 150 ? 0.1 : pps > 60 ? 0.5 : 1, major = pps > 150 ? 1 : 5;
+  g.fillStyle = '#9a94ad'; g.font = '11px ui-monospace, Menlo, monospace';
+  for (let t = Math.ceil(ta / minor) * minor; t < tb; t += minor) {
+    const isMaj = Math.abs(t / major - Math.round(t / major)) < 1e-6, x = X(t);
+    g.fillRect(x, isMaj ? 8 : 15, 1, isMaj ? 14 : 7);
+    if (isMaj) g.fillText(fmt(t), x + 3, 12);
+    else if (pps > 400 && Math.abs(t * 10 - Math.round(t * 10)) < 1e-6) { g.globalAlpha = 0.6; g.fillText('.' + Math.round((t % 1) * 10), x + 2, 12); g.globalAlpha = 1; }
+  }
+  // selected segment
+  const c = flat[sel];
+  if (c) {
+    const a = X(c.start), b = X(segEnd(sel));
+    g.fillStyle = 'rgba(79,214,255,0.13)'; g.fillRect(a, specTop, b - a, specH + ON);
+    g.fillStyle = 'rgba(79,214,255,0.9)'; g.fillRect(a, specTop, Math.max(0, b - a), 2);
+  }
+  // lyric lane
+  g.fillStyle = '#16131c'; g.fillRect(0, lyTop, Wc, LY);
+  g.textBaseline = 'alphabetic';
+  flat.forEach((ch, i) => {
+    const x = X(ch.start);
+    if (ch.last) { const xe = X(ch.end); if (xe > -20 && xe < Wc + 20) { g.strokeStyle = 'rgba(155,147,184,0.7)'; g.setLineDash([3, 3]); g.lineWidth = 1; g.beginPath(); g.moveTo(xe, onTop); g.lineTo(xe, lyTop + 56); g.stroke(); g.setLineDash([]); g.fillStyle = 'rgba(155,147,184,0.9)'; g.fillRect(xe - 4, lyTop + 52, 8, 8); } }
+    if (x < -60 || x > Wc + 60) return;
+    const col = colorOf(ch, i), isSel = i === sel;
+    g.strokeStyle = col; g.lineWidth = isSel ? 2 : 1; g.globalAlpha = isSel ? 1 : 0.85;
+    g.beginPath(); g.moveTo(x, specTop); g.lineTo(x, lyTop + 44); g.stroke();
+    g.fillStyle = col; g.beginPath(); g.moveTo(x, lyTop); g.lineTo(x - 6, lyTop + 9); g.lineTo(x + 6, lyTop + 9); g.closePath(); g.fill();
+    g.globalAlpha = 1;
+    g.font = `${isSel ? 700 : 500} 24px "PingFang SC","Hiragino Sans GB","Noto Sans CJK SC",sans-serif`;
+    g.fillStyle = isSel ? '#fff' : col; g.fillText(ch.w, x + 4, lyTop + 38);
+    if (ch.wi === 0) { g.font = '12px -apple-system,"PingFang SC",sans-serif'; g.fillStyle = '#7f7896'; g.fillText(`第 ${ch.li + 1} 句  ${lines[ch.li].text}`, x + 4, lyTop + 76); }
+  });
+  // playhead + hover
+  const p = pos();
+  if (p != null) { g.fillStyle = '#ff5a5a'; g.fillRect(X(p) - 1, 0, 2, Hc); }
+  if (hoverX != null && !drag) { g.fillStyle = 'rgba(255,255,255,0.35)'; g.fillRect(hoverX, specTop, 1, specH + ON); }
+  info();
+}
+function info() {
+  const c = flat[sel]; if (!c) return;
+  const ls = $('#lineSel'); if (ls !== document.activeElement && +ls.value !== c.li) ls.value = c.li;
+  const st = c.dirty || c.endDirty ? '已修改，未保存' : c.confirmed ? '已确认，未保存' : c.reverted ? '将还原为自动' : c.fixed ? '已校准' : c.conf < 0.5 ? '自动推算，待查' : 'Whisper 识别';
+  $('#curInfo').textContent = `第 ${c.li + 1} 句 · 第 ${c.wi + 1} 字「${c.w}」  起点 ${c.start.toFixed(3)} s  到下一条线 ${(segEnd(sel) - c.start).toFixed(3)} s  ·  ${st}`;
+  $('#hoverInfo').textContent = hoverX != null ? `鼠标 ${T(hoverX).toFixed(3)} s` : '';
+}
+
+// ------------------------------------------------------------------ playback
+function stop() { playToken++; if (play) { const p = play; play = null; clearTimeout(p.timer); try { p.node.stop(); } catch (e) {} } draw(); }
+// Audio can get stuck (the computer slept, headphones were plugged in or out, the tab sat idle): make sure the
+// context is really running before every play, and rebuild it if it will not resume. The decoded buffer is
+// independent of the context, so nothing needs re-decoding.
+let playToken = 0;
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+function newAudio() { if (actx && actx.state !== 'closed') actx.close().catch(() => {}); actx = new AudioContext(); actx.onstatechange = audioBadge; audioBadge(); }
+async function ensureAudio() {
+  if (!actx || actx.state === 'closed') newAudio();
+  for (let attempt = 0; attempt < 2 && actx.state !== 'running'; attempt++) {
+    if (attempt) newAudio();
+    try { await Promise.race([actx.resume(), sleep(400)]); } catch (e) {}
+  }
+  audioBadge();
+  return actx.state === 'running';
+}
+function audioBadge() {
+  const b = $('#audioBtn'); if (!b) return;
+  const ok = actx && actx.state === 'running';
+  b.textContent = ok ? '🔊 音频正常' : '🔇 音频未启动（点这里）'; b.classList.toggle('pending', !ok);
+}
+async function playRange(a, b, loopable) {
+  stop(); if (!buf) return;
+  const my = ++playToken;
+  if (!(await ensureAudio())) { status('音频没能启动：点一下页面或"音频"按钮再试'); return; }
+  if (my !== playToken) return;
+  a = clamp(a, 0, buf.duration); b = clamp(b, 0, buf.duration); if (b - a < 0.02) return;
+  const node = actx.createBufferSource(); node.buffer = buf; node.playbackRate.value = speed; node.connect(actx.destination);
+  const p = { node, from: a, to: b, at: actx.currentTime, timer: 0 };
+  node.onended = () => {
+    if (play !== p) return;
+    if (loop && loopable) p.timer = setTimeout(() => { if (play === p) playRange(a, b, true); }, 380);
+    else { play = null; draw(); }
+  };
+  node.start(0, a, b - a); play = p;
+  const tick = () => { if (play !== p && !(play && play.from === a)) return; const q = pos(); if (q != null && (X(q) > Wc - 40 || X(q) < 0)) t0 = q - 0.25 * Wc / pps; draw(); if (play) requestAnimationFrame(tick); };
+  requestAnimationFrame(tick);
+}
+// space: from this character's line to the next one. shift+space: the 0.6 s just BEFORE the line, stopping on it —
+// if the syllable is already audible at the end, the line is too late; if the tail is silence, it can move earlier.
+const playSeg = before => { const c = flat[sel]; if (!c) return; if (before) playRange(c.start - 0.6, c.start, true); else playRange(c.start, segEnd(sel), true); };
+const playLine = () => { const c = flat[sel]; if (!c) return; const l = lines[c.li]; playRange(l.start - 0.3, l.end + 0.25, true); };
+
+// ------------------------------------------------------------------ editing
+function snapshot(i) { const c = flat[i]; return { i, start: c.start, end: c.end, dirty: c.dirty, endDirty: c.endDirty, confirmed: c.confirmed, reverted: c.reverted, rem: removals.has(K(c.li, c.wi)) }; }
+function pushUndo(i) { undo.push(snapshot(i)); if (undo.length > 500) undo.shift(); }
+function doUndo() { const s = undo.pop(); if (!s) return; const c = flat[s.i]; Object.assign(c, { start: s.start, end: s.end, dirty: s.dirty, endDirty: s.endDirty, confirmed: s.confirmed, reverted: s.reverted }); if (s.rem) removals.add(K(c.li, c.wi)); else removals.delete(K(c.li, c.wi)); sel = s.i; refreshSave(); draw(); }
+function limits(i) { const c = flat[i], pv = flat[i - 1], nx = flat[i + 1]; return [pv ? pv.start + 0.03 : 0, Math.min(nx ? nx.start - 0.03 : 1e9, c.last ? c.end - 0.05 : 1e9)]; }
+function setStart(i, t, push = false) {
+  const c = flat[i]; let [lo, hi] = limits(i);
+  if (push) hi = 1e9;
+  c.start = clamp(t, lo, hi); c.dirty = true; c.reverted = false; removals.delete(K(c.li, c.wi));
+  if (push) { for (let k = i + 1; k < flat.length && flat[k].start < flat[k - 1].start + 0.03; k++) flat[k].start = flat[k - 1].start + 0.03; if (c.last && c.end < c.start + 0.05) c.end = c.start + 0.3; }
+  refreshSave();
+}
+function setEnd(i, t) { const c = flat[i], nx = flat[i + 1]; c.end = clamp(t, c.start + 0.05, nx ? nx.start : 1e9); c.endDirty = true; refreshSave(); }
+function nudge(d) { pushUndo(sel); setStart(sel, flat[sel].start + d); draw(); }
+function snapOnset() {
+  if (!onset) return; const c = flat[sel], fps = spec.fps, [lo, hi] = limits(sel);
+  let best = -1, bv = 0;
+  for (let k = Math.floor((c.start - 0.15) * fps); k <= Math.ceil((c.start + 0.15) * fps); k++) {
+    if (k < 1 || k >= onset.length - 1 || onset[k] < 45 || onset[k] < onset[k - 1] || onset[k] < onset[k + 1]) continue;
+    const t = k / fps; if (t < lo || t > hi) continue;
+    const v = onset[k] * (1 - 0.6 * Math.abs(t - c.start) / 0.15); if (v > bv) { bv = v; best = t; }
+  }
+  if (best < 0) { status('附近 ±150 ms 内没有明显的起音'); return; }
+  pushUndo(sel); setStart(sel, best - 0.5 / fps); status(`吸附到起音 ${best.toFixed(3)} s`); draw();
+}
+function tap() { const q = pos(); if (q == null) { status('先播放（回车播放整句），在每个字刚出声时按 T'); return; } pushUndo(sel); setStart(sel, q, true); if (sel < flat.length - 1) sel++; draw(); }
+function confirmCur() { const c = flat[sel]; pushUndo(sel); c.confirmed = true; c.reverted = false; removals.delete(K(c.li, c.wi)); refreshSave(); if (sel < flat.length - 1) select(sel + 1); else draw(); }
+function revert() { const c = flat[sel], k = K(c.li, c.wi); pushUndo(sel); c.dirty = c.endDirty = c.confirmed = false; if (c.fixed) { removals.add(k); c.reverted = true; } refreshSave(); draw(); }
+function nextTodo(dir) { for (let i = sel + dir; i >= 0 && i < flat.length; i += dir) { const c = flat[i]; if (c.conf < 0.5 && !c.fixed && !c.dirty && !c.confirmed && c.start >= (P.from || 0) - 1) { select(i); return; } } status('这个方向没有待查的字了'); }
+function pendingCount() { return flat.filter(c => c.dirty || c.endDirty || c.confirmed).length + removals.size; }
+function refreshSave() { const n = pendingCount(); const b = $('#saveBtn'); b.textContent = n ? `保存 ${n} 处到 lyrics_fix.json` : '保存到 lyrics_fix.json'; b.classList.toggle('pending', n > 0); }
+async function save() {
+  const set = flat.filter(c => c.dirty || c.endDirty || c.confirmed).map(c => ({ line: c.li, word: c.wi, start: +c.start.toFixed(3), end: c.last ? +c.end.toFixed(3) : null }));
+  const remove = [...removals].map(k => k.split(':').map(Number));
+  if (!set.length && !remove.length) { status('没有需要保存的改动'); return; }
+  status('保存并重新对齐…');
+  try {
+    const r = await j('/api/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ set, remove }) });
+    lastLog = r.log || '';
+    if (!r.ok) { showLog(true); status('对齐脚本出错，见日志'); return; }
+    removals.clear(); undo = [];
+    await loadLyrics();
+    const low = (lastLog.match(/(\d+) words with low confidence/) || [])[1];
+    status(`已保存 ${set.length + remove.length} 处 · 共 ${r.fixes} 条校准${low != null ? ` · 还有 ${low} 个自动推算的字` : ''}`);
+  } catch (e) { status('保存失败：' + e.message); }
+}
+function showLog(on) { const el = $('#log'); el.textContent = lastLog || '（还没有日志）'; el.style.display = on ? 'block' : 'none'; }
+
+// ------------------------------------------------------------------ navigation
+function ensureVisible(i, center) { const x = X(flat[i].start), x2 = X(segEnd(i)); if (center || x < 60 || x2 > Wc - 60) t0 = flat[i].start - (center ? 0.4 : 0.3) * Wc / pps; }
+function select(i, center) { sel = clamp(i, 0, flat.length - 1); ensureVisible(sel, center); $('#lineSel').value = flat[sel].li; draw(); }
+function zoom(f, ax) { const tA = T(ax ?? Wc / 2); pps = clamp(pps * f, 25, 2400); t0 = tA - (ax ?? Wc / 2) / pps; draw(); }
+function hitMarker(x, y) {
+  let best = null, bd = 8;
+  flat.forEach((c, i) => {
+    const d = Math.abs(X(c.start) - x); if (d < bd || (d === bd && i === sel)) { bd = d; best = { i, kind: 'start' }; }
+    if (c.last && y > onTop) { const de = Math.abs(X(c.end) - x); if (de < bd) { bd = de; best = { i, kind: 'end' }; } }
+  });
+  return best;
+}
+cv.addEventListener('mousedown', e => {
+  if (actx && actx.state === 'suspended') actx.resume().catch(() => {});
+  const x = e.offsetX, y = e.offsetY, h = hitMarker(x, y);
+  if (h) { drag = { ...h, pushed: false }; sel = h.i; draw(); return; }
+  if (y >= lyTop) { let k = -1; flat.forEach((c, i) => { if (X(c.start) <= x) k = i; }); if (k >= 0) select(k); return; }
+  drag = { pan: true, x0: x, tA: t0, moved: false, y };
+});
+addEventListener('mousemove', e => {
+  const r = cv.getBoundingClientRect(), x = e.clientX - r.left;
+  hoverX = x >= 0 && x <= Wc && e.clientY >= r.top && e.clientY <= r.bottom ? x : null;
+  if (drag && drag.pan) { if (Math.abs(x - drag.x0) > 3) drag.moved = true; t0 = drag.tA - (x - drag.x0) / pps; draw(); return; }
+  if (drag) { if (!drag.pushed) { pushUndo(drag.i); drag.pushed = true; } if (drag.kind === 'end') setEnd(drag.i, T(x)); else setStart(drag.i, T(x)); draw(); return; }
+  cv.style.cursor = hoverX != null && hitMarker(x, e.clientY - r.top) ? 'ew-resize' : 'default';
+  draw();
+});
+addEventListener('mouseup', e => {
+  if (drag && drag.pan && !drag.moved) { const t = T(drag.x0); let k = -1; flat.forEach((c, i) => { if (c.start <= t) k = i; }); if (k >= 0) { sel = k; draw(); } }
+  drag = null;
+});
+cv.addEventListener('dblclick', e => { if (e.offsetY < lyTop) playRange(T(e.offsetX), T(e.offsetX) + 1.5, false); });
+cv.addEventListener('wheel', e => {
+  e.preventDefault();
+  if (e.ctrlKey || e.metaKey) zoom(Math.exp(-e.deltaY * 0.0025), e.offsetX);
+  else { t0 += (Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY) / pps; draw(); }
+}, { passive: false });
+addEventListener('keydown', e => {
+  if (e.target.tagName === 'SELECT' && ['ArrowUp', 'ArrowDown'].includes(e.key)) return;
+  if (actx && actx.state === 'suspended') actx.resume().catch(() => {});
+  const k = e.key, mod = e.metaKey || e.ctrlKey;
+  if (mod && (k === 's' || k === 'S')) { e.preventDefault(); save(); return; }
+  if (mod && (k === 'z' || k === 'Z')) { e.preventDefault(); doUndo(); return; }
+  if (mod) return;
+  let used = true;
+  if (k === ' ') { if (play) stop(); else playSeg(e.shiftKey); }
+  else if (k === 'Enter') { if (play) stop(); else playLine(); }
+  else if (k === 'Escape') { stop(); showLog(false); }
+  else if (k === 'l' || k === 'L') setLoop(!loop);
+  else if (k === 'ArrowLeft' || k === 'ArrowRight') { const d = k === 'ArrowLeft' ? -1 : 1; if (e.altKey) nudge(d * (e.shiftKey ? 0.05 : 0.01)); else { select(sel + d); if (play) playSeg(false); } }
+  else if (k === ',' || k === '<') nudge(k === '<' || e.shiftKey ? -0.05 : -0.01);
+  else if (k === '.' || k === '>') nudge(k === '>' || e.shiftKey ? 0.05 : 0.01);
+  else if (k === 'a' || k === 'A') snapOnset();
+  else if (k === 't' || k === 'T') tap();
+  else if (k === 'c' || k === 'C') confirmCur();
+  else if (k === 'Backspace' || k === 'Delete') revert();
+  else if (k === 'n') nextTodo(1);
+  else if (k === 'N') nextTodo(-1);
+  else if (k === '1' || k === '2' || k === '3') setSpeed([1, 0.75, 0.5][+k - 1]);
+  else if (k === '=' || k === '+') zoom(1.25);
+  else if (k === '-' || k === '_') zoom(0.8);
+  else used = false;
+  if (used) { e.preventDefault(); if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur(); }
+});
+function setSpeed(s) { speed = s; document.querySelectorAll('[data-sp]').forEach(b => b.classList.toggle('on', +b.dataset.sp === s)); if (play) { const a = play.from, b = play.to; playRange(a, b, true); } }
+function setLoop(on) { loop = on; $('#loopBtn').classList.toggle('on', on); }
+document.querySelectorAll('[data-sp]').forEach(b => b.onclick = () => setSpeed(+b.dataset.sp));
+$('#loopBtn').onclick = () => setLoop(!loop);
+$('#zi').onclick = () => zoom(1.25); $('#zo').onclick = () => zoom(0.8);
+$('#saveBtn').onclick = save;
+$('#logBtn').onclick = () => showLog($('#log').style.display !== 'block');
+$('#audioBtn').onclick = async () => { stop(); newAudio(); const ok = await ensureAudio(); status(ok ? '音频已重置' : '音频还是没能启动：检查系统音量 / 输出设备 / 这个标签页是否被静音'); };
+if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) navigator.mediaDevices.addEventListener('devicechange', () => { stop(); newAudio(); });
+$('#lineSel').onchange = e => { const li = +e.target.value, i = flat.findIndex(c => c.li === li), l = lines[li]; pps = clamp((Wc - 160) / Math.max(1, l.end - l.start + 1.2), 60, 700); t0 = l.start - 0.6; sel = i; draw(); e.target.blur(); };
+addEventListener('beforeunload', e => { if (pendingCount()) { e.preventDefault(); e.returnValue = ''; } });
+addEventListener('resize', resize);
+resize();
+init().catch(err => { $('#busy').textContent = '载入失败：' + err.message; console.error(err); });
+</script>
+</body>
+</html>
