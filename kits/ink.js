@@ -153,12 +153,9 @@ function cutPolyline(pts, u) {
   return out;
 }
 
-/**
- * Brush stroke along pts with width w. o.alpha (ink strength), o.dry 0..1 (飞白: bristles break up,
- * more towards the tail), o.upto 0..1 (draw-on: paint only the first part), o.taper (fn of s along the
- * WHOLE stroke), o.seed, o.wet (0..1 soft core under the bristles).
- */
-function inkStroke(g, pts, w, o = {}) {
+/** The original inkStroke (gaps at absolute arc length; 2-point strokes draw almost nothing). Kept so a finished
+ *  project can pin its approved look: "inkStroke": 1 in project.js routes every inkStroke call here. */
+function inkStrokeV1(g, pts, w, o = {}) {
   if (!pts || pts.length < 2) return;
   const up = o.upto == null ? 1 : clamp(o.upto); if (up <= 0) return;
   const P = up < 1 ? cutPolyline(pts, up) : pts; if (P.length < 2) return;
@@ -195,6 +192,79 @@ function inkStroke(g, pts, w, o = {}) {
   }
   g.restore();
   return len;
+}
+
+/** Resample a polyline to about `step` px between points; returns {pts, cum} (cum = arc length at each point). */
+function resamplePolyline(pts, step) {
+  const out = [pts[0]], cum = [0]; let acc = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1], b = pts[i], d = Math.hypot(b[0] - a[0], b[1] - a[1]); if (d <= 0) continue;
+    const k = Math.max(1, Math.ceil(d / step));
+    for (let j = 1; j <= k; j++) { out.push([lerp(a[0], b[0], j / k), lerp(a[1], b[1], j / k)]); cum.push(acc + d * j / k); }
+    acc += d;
+  }
+  return { pts: out, cum };
+}
+
+/**
+ * Brush stroke along pts with width w. o.alpha (ink strength), o.dry 0..1 (飞白: bristles break up,
+ * more towards the tail), o.upto 0..1 (draw-on: paint only the first part), o.taper (fn of s along the
+ * WHOLE stroke), o.seed, o.wet (0..1 soft core under the bristles), o.bristles (count),
+ * o.breakLen (px: typical length of a bristle run / gap, default 36; 15–25 = broken texture, 50–80 = long 飞白),
+ * o.gapLen (px: pin the gap pattern to this reference length, for strokes whose length animates).
+ *
+ * Stable on twos: the bristle gaps are placed along the NORMALISED arc length, so a stroke redrawn with a little
+ * jitter every drawing (line boil) keeps its 飞白 where it was instead of letting the gaps crawl. Without o.gapLen
+ * the reference length is the stroke's own length, snapped to quarter-octave steps and cross-faded between the two
+ * nearest (so it never jumps). The stroke is resampled every few px, so gaps start and end smoothly, and short
+ * 2-point strokes draw properly. A project that wants the original strokes sets "inkStroke": 1 in project.js.
+ */
+function inkStroke(g, pts, w, o = {}) {
+  if (MV.project && MV.project.inkStroke === 1) return inkStrokeV1(g, pts, w, o);
+  if (!pts || pts.length < 2) return;
+  const up = o.upto == null ? 1 : clamp(o.upto); if (up <= 0) return;
+  const Lfull = polylineLength(pts); if (Lfull <= 0) return;
+  const cut = up < 1 ? cutPolyline(pts, up) : pts; if (cut.length < 2) return;
+  const { pts: P, cum } = resamplePolyline(cut, clamp(w / 5, 1.5, 4)), n = P.length; if (n < 2) return;
+  const taper = o.taper || BRUSH.std, a = o.alpha ?? INK.A.nong, seed = o.seed || 1, dry = o.dry ?? 0.25;
+  const sAt = i => cum[i] / Lfull;                              // position along the WHOLE stroke, 0..1
+  g.save();
+  // wet core
+  const wet = o.wet ?? 0.75;
+  if (wet > 0) { pathPoly(g, brushPoly(P, w * 0.9, s => taper(s * up))); g.fillStyle = ink(a * wet * (1 - dry * 0.55)); g.fill(); }
+  // bristles
+  const nb = o.bristles || Math.max(4, Math.min(22, Math.round(w / 1.8)));
+  const nx = [], ny = [];
+  for (let i = 0; i < n; i++) {
+    const p0 = P[Math.max(0, i - 1)], p1 = P[Math.min(n - 1, i + 1)]; let dx = p1[0] - p0[0], dy = p1[1] - p0[1]; const d = Math.hypot(dx, dy) || 1;
+    nx.push(-dy / d); ny.push(dx / d);
+  }
+  // gap pattern: noise over s × reference length (two quarter-octave neighbours, cross-faded, variance kept)
+  let La, Lb, wq = 0;
+  if (o.gapLen) La = Lb = o.gapLen;
+  else { const lg = Math.log2(Math.max(8, Lfull)) * 4, lo = Math.floor(lg); wq = lg - lo; La = Math.pow(2, lo / 4); Lb = Math.pow(2, (lo + 1) / 4); }
+  const norm = 1 / Math.hypot(1 - wq, wq), bl = o.breakLen;
+  g.lineCap = 'round'; g.lineJoin = 'round';
+  for (let b = 0; b < nb; b++) {
+    const off = (b + 0.5) / nb - 0.5, hb = hash(seed, b, 7);
+    const sc = (bl || 36) * (0.75 + 0.5 * hb);                  // run / gap length for this bristle
+    const nz = L => noise1(L / sc + b * 7.31, seed) * 0.82 + 0.18 * noise1(L / (sc * 0.2) + b * 3.7, seed + 11);
+    g.lineWidth = Math.max(0.6, w / nb * (1.2 + hb * 0.9));
+    g.strokeStyle = ink(a * (0.55 + 0.45 * hb));
+    g.beginPath(); let on = false;
+    for (let i = 0; i < n; i++) {
+      const s = sAt(i), tw = taper(s) * w;
+      const edge = Math.abs(off) * 2;                             // outer bristles run dry first
+      const dd = dry * (0.35 + 0.9 * smoothstep(0.2, 1, s)) * (0.6 + 0.8 * edge);   // the ink load drops along the stroke
+      const nv = wq ? (nz(s * La) * (1 - wq) + nz(s * Lb) * wq) * norm : nz(s * La);
+      const keep = nv * 0.5 + 0.5 > dd;
+      const x = P[i][0] + nx[i] * off * tw, y = P[i][1] + ny[i] * off * tw;
+      if (keep && tw > 0.3) { if (!on) { g.moveTo(x, y); on = true; } else g.lineTo(x, y); } else on = false;
+    }
+    g.stroke();
+  }
+  g.restore();
+  return Lfull * up;
 }
 
 /** Smooth a sparse control polyline into a dense one (Catmull–Rom). */
@@ -473,6 +543,6 @@ MV.wipe('wash', {
   },
 });
 
-MV.ink = { INK, ink, fbm2, paintXuan, granulate, blobPts, inkSprites, bloomR, inkBloom, inkDrop, BRUSH, cutPolyline, inkStroke, spline, inkRidge, inkRain, inkSoft, inkColumnsOf, inkColumn, inkLyrics, inkLoadFont };
+MV.ink = { INK, ink, fbm2, paintXuan, granulate, blobPts, inkSprites, bloomR, inkBloom, inkDrop, BRUSH, cutPolyline, resamplePolyline, inkStroke, spline, inkRidge, inkRain, inkSoft, inkColumnsOf, inkColumn, inkLyrics, inkLoadFont };
 Object.assign(G, MV.ink);
 })(window);

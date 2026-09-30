@@ -10,12 +10,12 @@
 ```
 mv-kit/
   engine/        渲染引擎（与风格无关）：数据 API、时间线、后期、运动模糊、预览播放器
-  kits/          风格工具包；anime.js（日本 TV 动画赛璐璐风）、ink.js（水墨）
+  kits/          风格工具包；anime.js（日本 TV 动画赛璐璐风）、ink.js（水墨）、pigment.js（WebGL 颜料合成层：宣纸 / 素胚 / 青花釉面）
   analysis/      音乐分析：analyze_audio.py（节拍 / 小节 / 段落 / 鼓点 / 包络）
                  align_lyrics.py（Whisper + 对齐 → 逐词时间），separate.py（可选，Demucs 分轨）
   tools/         render.py（导出视频 / 截图 / 拼板 / 检查），new_project.py（新建项目）
   template/      新项目模板：会动的歌词字幕 + 风格圣经模板 TREATMENT.md
-  projects/      你的项目。anime-pdoom 是示例（10 秒二次元 demo）
+  projects/      你的项目。anime-pdoom 是示例（10 秒二次元 demo），pigment-demo 是 pigment.js 的样张
   docs/ENGINE.md 引擎 API 参考（写镜头时看）
   PROMPTS.md     分阶段提示词手册（和 Claude 一起做新 MV 时用）
   CLAUDE.md      给 Claude 的项目约定（在这个文件夹里用 Claude Code 时自动读取）
@@ -48,12 +48,16 @@ open projects/my-song/index.html
 
 # 5. 写方案和镜头（和 Claude 一起：见 PROMPTS.md），随时出拼板检查
 uv run tools/render.py projects/my-song sheet --cuts
+uv run tools/render.py projects/my-song strip --t 40.2 --dur 1.2   # 关键动作：从 40.2 s 起每 0.2 s 一帧
 
 # 6. 导出
 uv run tools/render.py projects/my-song                       # 1080p，project.js 里的 fps
 uv run tools/render.py projects/my-song --samples 4           # 加运动模糊（慢 4 倍）
 uv run tools/render.py projects/my-song --from 30 --to 45     # 只导一段
+uv run tools/render.py projects/my-song --workers 6           # 并行浏览器数（默认按 CPU 核数，最多 4）
 ```
+
+导出是并行的：帧分成几段，每段一个无头浏览器和一个 x264 同时渲染，最后无损拼接再合上歌。帧以 JPEG（质量 0.98）传出页面，比无损 PNG 快约 1.7 倍，差别低于 x264 本身的压缩损失；要无损就加 `--png`。Ctrl-C 会等每段渲完手上的帧、清掉临时文件再退出，再按一次立即退出。
 
 模板项目开箱就能出一支"动态歌词"视频：背景随段落换色、随低音呼吸，歌词逐词点亮。之后按方案把 `scenes/` 里的镜头换成你的。
 

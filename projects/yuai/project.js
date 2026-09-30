@@ -6,6 +6,8 @@ window.MV_PROJECT = {
   "to": 102.86,
   "fps": 24,
   "drawRate": 12,
+  // the original brush strokes this film was approved with (kits/ink.js inkStrokeV1); delete the next line for the new stable ones
+  "inkStroke": 1,
   "width": 1920,
   "height": 1080,
   "kits": [

@@ -16,6 +16,8 @@
 - 确定性：一帧只由 `f.t` 决定。禁止 `Math.random / Date.now / performance.now`；用 `hash / mulberry32 / noise1`。不在 `render` 里累积状态。
 - 静态的画（背景、贴图）在 `MV.onInit` 或场景 `init()` 里画一次。
 - 手绘感：角色动作和线条抖动用 `f.tq` / `f.tick`（按 `drawRate` 定格），镜头运动用连续的 `f.t`。
+- 颜料 / 纸感用 `kits/pigment.js`：往 `L.wet / L.dry / L.col` 画浓度再 `pigmentDraw`，不要在 Canvas 2D 里用大面积 `filter: blur()` 模拟晕染。纸要按镜头的世界坐标传 `offset`，免得平移时纸纹游动。
+- `inkStroke` 在线条抖动下是稳定的；笔画长度在动画里变化（生长、伸缩）时传固定的 `gapLen`。
 - 歌词逐词同步：词在 `start` 时出现或高亮，不能抢跑；文字离边缘 ≥ 96 px，不被角色或特效盖住。
 - 大动作落在拍点上：切镜在小节头或唱到的音节，冲击落在 `f.a.kick / f.a.snare`。
 - 全局名字冲突：多个 `<script>` 共享全局作用域，顶层 `const` / `let` 不能重名。项目内的顶层常量加前缀或放进函数 / 对象里。
@@ -32,7 +34,8 @@
 uv run tools/render.py projects/X check            # 列出镜头、每个镜头渲染一帧、报错
 uv run tools/render.py projects/X sheet --cuts     # 每个镜头首 / 中 / 尾三帧拼板 → out/sheet.png
 uv run tools/render.py projects/X stills --t 12.5,20
+uv run tools/render.py projects/X strip --t 40.2 --dur 1.2   # 关键动作每 0.2 s 一帧 → out/strip.png
 uv run tools/render.py projects/X --from 30 --to 40 --preset veryfast   # 快速看一段动态
-uv run tools/render.py projects/X                  # 最终导出
+uv run tools/render.py projects/X                  # 最终导出（并行 --workers N，默认按核数；--png 无损传帧）
 uv run tools/tune_lyrics.py projects/X             # 歌词校准工具（频谱 + 逐字竖线，保存到 data/lyrics_fix.json）
 ```

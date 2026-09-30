@@ -24,6 +24,13 @@ MV.onInit = fn => { initHooks.push(fn); };
  */
 MV.wipes = {};
 MV.wipe = (name, def) => { MV.wipes[name] = def; return def; };
+/**
+ * Post filters: MV.postFilter(fn) — fn(canvas, post, t) runs on every finished frame (after motion blur, before
+ * shake / zoom, grain, vignette, flash) and may redraw the canvas in place. `post` is the merged post object
+ * (project.post + what the scene returned), so a filter can read its own settings from it (e.g. post.pigment).
+ */
+MV.postFilters = [];
+MV.postFilter = fn => { MV.postFilters.push(fn); };
 
 const POST_DEFAULTS = { grain: 0.06, vignette: 0.25, vignetteColor: '20,10,30', shake: 0, zoom: 1, rot: 0, flash: 0, flashColor: '255,250,240', fade: 0, invert: false };
 
@@ -138,6 +145,7 @@ function makeGrain() {
 function applyPost(o, src, t, post) {
   const q = { ...POST_DEFAULTS, ...(MV.project.post || {}), ...post }, tk = tick(t);
   reset(o);
+  for (const fn of MV.postFilters) fn(src, q, t);
   let sx = 0, sy = 0;
   if (Array.isArray(q.shake)) [sx, sy] = q.shake;
   else if (q.shake) { sx = (hash(tk, 91) - 0.5) * 2 * q.shake; sy = (hash(tk, 92) - 0.5) * 2 * q.shake; }

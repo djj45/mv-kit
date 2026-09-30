@@ -43,6 +43,8 @@ MV.scene('wide', {
 
 `shake`（像素，或 `[x, y]`）、`zoom`、`rot`、`flash`（0..1 白闪）、`flashColor`、`fade`（0..1 压黑）、`invert`、`grain`、`vignette`、`vignetteColor`。默认值来自 `project.post`。
 
+后期滤镜：`MV.postFilter(fn)` 注册一个对整帧生效的滤镜，`fn(canvas, post, t)` 在运动模糊之后、shake / zoom / 颗粒 / 暗角之前运行，可以原地重画这张画布；`post` 是合并后的后期参数，滤镜从里面读自己的设置。例：pigment.js 的整帧颜料层读 `post.pigment`（见下）。
+
 ## 时间线（timeline.js）
 
 ```js
@@ -92,10 +94,24 @@ MV.timeline(({ lyrics, audio, cut, after, start, T0, T1 }) => [
 
 **anime.js**（日本 TV 动画赛璐璐风）：`paintCumulus`（硬边分色积云）、`drawLit`（角色单独成层 + 轮廓光）、`focusLines`（集中线）、`upLines`（速度线）、`sfx`（片假名音效字）、`titleText / lyricRow / bigWord / jpSub`（动画片头风格的歌词字和字幕）、常量 `FONT MONO INK`。配合 `drawRate: 12` 和 `post.grain ≈ 0.09`。
 
-**ink.js**（水墨）：所有墨色都是同一种墨的不同浓度（`INK.A.qing / dan / zhong / nong / jiao`），纸纹透得出来。`paintXuan`（暖白宣纸）、`inkBloom / inkDrop`（墨滴落下、按落下后的时间晕开）、`inkStroke`（藏锋出锋 + 飞白笔毛，`upto` 可逐笔画出）、`inkRidge`（山峦，带皴擦和点苔）、`inkRain`（三层斜雨，可避开歌词框）、`inkSoft`（低分辨率绘制再放大的柔边晕染，`grain` 让纸纹透出）、`inkLyrics / inkColumn`（竖排、从右往左、逐字洇出）、`inkLoadFont`，以及转场 `ink` / `wash`。配合 `drawRate: 12`、`post.grain ≈ 0.05`、`background` 设成纸色。
+**ink.js**（水墨）：所有墨色都是同一种墨的不同浓度（`INK.A.qing / dan / zhong / nong / jiao`），纸纹透得出来。`paintXuan`（暖白宣纸）、`inkBloom / inkDrop`（墨滴落下、按落下后的时间晕开）、`inkStroke`（藏锋出锋 + 飞白笔毛，`upto` 可逐笔画出；见下）、`inkRidge`（山峦，带皴擦和点苔）、`inkRain`（三层斜雨，可避开歌词框）、`inkSoft`（低分辨率绘制再放大的柔边晕染，`grain` 让纸纹透出）、`inkLyrics / inkColumn`（竖排、从右往左、逐字洇出）、`inkLoadFont`，以及转场 `ink` / `wash`。配合 `drawRate: 12`、`post.grain ≈ 0.05`、`background` 设成纸色。
+
+`inkStroke(g, pts, w, o)` 在一拍二下是稳定的：飞白的断笔按**归一化弧长**放置，所以每张作画都给线条加一点抖动（line boil）时，飞白留在原处，不会沿着笔画爬动。笔画按几个像素重新采样，断笔的起止是平滑的，只有两个点的短笔画也能正常画出。`o.breakLen`（像素）控制每根笔毛连续 / 断开的典型长度：默认 36，15–25 更碎，50–80 是长飞白；笔画长度本身在动画里变化时（比如生长的枝条），传 `o.gapLen`（固定参考长度），断笔就钉在笔画上。老项目想保留原来的笔触，在 `project.js` 里写 `"inkStroke": 1`（雨爱就这样钉住了）。
+
+**pigment.js**（颜料合成层，WebGL2）：把颜料画在纸、素胚、釉面上的合成器。两种用法：
+
+1. **分层**（新作品）：`const L = pigmentLayers()`（默认 W×H；`pigmentLayers(w, h)` 可以做贴图，比如瓶身展开图），每帧 `L.clear()`，然后往三层里画**浓度**：`L.wet`（分水、晕染、墨团：会晕开、边缘积色、有颗粒）、`L.dry`（勾线、干笔：清楚，咬纸纹）、`L.col`（真颜色：朱砂印、釉里红、天青天空，吃纸纹、上色不匀）。wet / dry 上只有 alpha 有用，用 `ink(a)` 或任何颜色画都行，ink.js 的 `inkStroke / inkBloom` 可以直接画进去。最后 `pigmentDraw(g, L, { preset, offset: [camX, 0] })`。浓度通过预设的色阶变成颜色；纸是程序生成、按 `offset / scale` 钉在世界坐标上的，镜头平移时不会游。`paper: 'none'` 输出白底，只有颜料变暗：用 `g.globalCompositeOperation = 'multiply'` 画到你自己画好的表面上（带明暗的瓶身），釉面高光在之后再画。
+   预设：`ink`（水墨 / 宣纸：纤维、宽晕开、明显积边、颗粒）、`raw`（生料 / 素胚：哑光陶土、细颗粒和铁点、拉坯横纹、几乎不晕、咬纸重）、`cobalt`（青花 / 釉面：光滑釉、分水积边、浓线周围的晕散 `halo`、浓处的铁锈斑 `spots`）。任何字段都可以覆盖：`bleed`（像素）、`rim`（积边 0..2）、`halo`、`spots`、`gran`（颗粒）、`tooth`（干笔咬纸）、`jitter`、`paper`、`paperColor`、`ramp: [[浓度, '#hex'], …]` + `paperRef`（这些颜色所在的纸色）、`spotColor`、`offset`、`scale`、`seed`。一帧里可以合成多次（每次用完立刻 `drawImage`，下一次会复用同一块 WebGL 画布）。
+2. **整帧**（已经画好的水墨）：`project.post.pigment = { rim: 0.8, wick: 0.5 }`（或场景 `render` 返回它）对整帧做一遍：淡墨块的内边缘积色（`rim`，`rimR` 像素半径），墨向纸里轻轻洇出（`wick`，`wickR`）。浓度按亮度相对 `paper`（默认宣纸色）估算。雨爱默认没开，想试就在它的 `project.js` 的 `post` 里加这一项。
+
+示例：`projects/pigment-demo`（三种预设并排，素胚 / 烧成后的"滴水分开"对比）。
 
 写新风格包的建议：只放"这种画风在任何歌里都用得上"的东西（笔触、质感、特效、文字风格）；角色、道具、具体场景放在项目的 `lib/` 里。
 
 ## 性能
 
 预览目标 < 40 ms / 帧。Canvas 2D 的大面积 `filter: blur()`、每帧新建大画布、每帧重画静态背景最费时，都应该移到 `init` 里。需要 WebGL 时，在场景里建一个离屏 WebGL 画布，渲染后 `g.drawImage(glCanvas, 0, 0)` 即可。
+
+WebGL 要跑在 GPU 上才快：导出时 `render.py` 已经请求 GPU（macOS 上用 Metal；`MV_ANGLE` 环境变量可改），`render.py … check` 会打印 WebGL 用的是什么渲染器，写着 software / SwiftShader 就是软件渲染，pigment.js 会慢很多。
+
+导出：`render.py` 把帧分成 `--workers` 段（默认按 CPU 核数，最多 4），每段一个无头浏览器 + 一个 x264 并行渲染，最后无损拼接再合上歌。帧以 JPEG（质量 0.98）传出页面；`--png` 改成无损 PNG（每帧慢约 1.7 倍）。因为每一帧只由 t 决定，并行和逐帧渲染的结果一样。
