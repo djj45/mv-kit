@@ -136,6 +136,25 @@ lmTerminal(g, f);
 
 示例：`projects/lumen-demo`（六个镜头，每种调色板和主要技法各一个）。
 
+**roto.js**（转描：AI 素材 / 实拍 → 孔版印刷赛璐璐，WebGL2）：把视频片段、静帧（即梦 / 任何生成器的输出、照片、手绘底板）重画成印刷出来的动画赛璐璐，**原始素材不上屏**：保边平涂（三遍）→ 每个像素吸附到镜头调色板里最近的油墨（本色 / 压暗两档）→ 压暗区铺 45° 网点 → XDoG 重新提线、按作画张抖动 → 一版错位的第二色线。然后整帧（歌词一起）过一遍印刷：纸纤维、纸齿、暗版错位、缺墨白点、颗粒、暗角。
+
+```js
+// 素材：uv run tools/frames.py projects/X J clips/sdJ.mp4 --t0 123.3   → frames/J.js（在 project.scripts 里列出）
+rotoDraw(g, rotoFrame('J', f.t), { pal: 'sea', tick: f.tick, cam: { x: .5, y: .48, z: 1.04, rot: 0 }, misCol: ROTO.INK.pink });
+const cv = rotoCel(src, o); g.drawImage(cv, 0, 0);    // 要再用这张结果（套印、贴到别处）时；下一次 roto 调用前有效
+rotoKara(g, f.t, line, { box: [96, 700, W - 192, 284] });   // 满屏逐词砸入；rotoSide 块状划入；rotoSub 明朝字幕；rotoSlam 单个词
+return { press: { mis: 1.5 + 3 * f.a.kick, grain: .03, vig: .35, flash: 0 } };   // 印刷参数（project.post.press 是默认值）
+```
+
+- 帧包：`tools/frames.py` 把 mp4、帧文件夹或单张静帧打成 `frames/<名字>.js`（JPEG data URL，所以双击 index.html 也能预览；file:// 的 `<img>` 会污染画布，WebGL 不收）。默认只留 `drawRate` 张 / 秒、宽 960（静帧 1920）；`--t0` = 片段第一帧对应的歌曲时间，`--delogo` 去水印。kit 在 `onInit` 里预载全部帧包。
+- `rotoFrame(seq, t, o)`：按 `onTwos(t) − t0` 取画（全片的画在同一个作画张上换）；`o.lag`（秒，口型偏晚时提前）、`o.at`（片段内时间，做慢放 / 定格，自己用 `f.tq` 量化）、`o.smooth`。
+- `rotoCel / rotoDraw` 选项：`pal`（`ROTO.PAL` 键名或 `['#hex', …]` 最多 10 色；皮肤色要列进去，不然脸会变成橙色）、`cam {x, y, z, rot}`（任意比例的素材都按铺满裁切；`rot` 时把 `z` 加大盖住四角）、`tick`（传 `f.tick`）、`line / lineTh`（线量 / 阈值）、`tone`（网点）、`shade`（压暗量）、`sat`、`expo`、`flat`（平涂程度）、`lineCol / misCol / shadeCol`、`key + keyCol`（按颜色抠底，出 alpha）、`remap {from, to, amt}`。
+- 调色板 `ROTO.PAL`：`room stage dc sea plug pink blue red mono`；油墨 `ROTO.INK`；字体 `ROTO.F.slab / mincho / mono / monoL`（Anton / Shippori Mincho B1 / JetBrains Mono，项目里嵌字体，见 roto-demo 的 `lib/fonts.js`；没嵌时退回 Impact / 冬青明朝 / Menlo）。
+- 歌词：一句在下一句的第一个字开始时离场（`o.until` 可改）；`rotoHud` 角落读数（左上两行字 + 右上计量条）；`rotoSpark` 星芒。
+- 配合：`project.post` 设 `grain: 0, vignette: 0, press: {…}`，`drawRate: 12`。每帧一次 cel 在 Mac 的 GPU 上约几十毫秒；静态的印样在 `init()` 里印好存成画布。
+
+示例：`projects/roto-demo`（P(doom) 最后一段副歌 + 尾声，四个镜头：不唱的视频、静帧当底板、对口型的全身舞台、特写拉远成印样墙）。
+
 写新风格包的建议：只放"这种画风在任何歌里都用得上"的东西（笔触、质感、特效、文字风格）；角色、道具、具体场景放在项目的 `lib/` 里。
 
 ## 性能
