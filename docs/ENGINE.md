@@ -106,6 +106,36 @@ MV.timeline(({ lyrics, audio, cut, after, start, T0, T1 }) => [
 
 示例：`projects/pigment-demo`（三种预设并排，素胚 / 烧成后的"滴水分开"对比）。
 
+**qinghua.js**（青花纹饰，需要 ink.js + pigment.js）：一切都画成颜料**浓度**画进 pigment 图层，再用 `raw`（生料 / 素胚）或 `cobalt`（青花 / 釉面）合成。`QH`（调色板 + 浓度 `QH.D.ying / dan / er / zheng / tou` + 仿宋 `QH.FONT`）；`qhLine`（勾线笔：粗细几乎不变、起笔顿点、手抖 + 一拍二线条抖动，`upto` 逐笔画出，`smooth` 圆滑）；`qhFill`（分水：平涂，`k` 从一点滴开铺满）；纹样点列 `qhBegonia`（海棠开光）`qhRuyi`（如意云肩）`qhCurl`（云纹卷）`qhSmoke`（一缕烟）`qhWaves`（海水）`qhPetal / qhPeony / qhLeaf`；`qhStickerLayers + qhSticker`（带剪影遮罩的图层：人物、手能挡住后面的画）；`qhErase`（留白：把形状从浓度层里挖掉）；`ctx.qhClear = L.col`（之后的线和分水顺带清掉颜色层，天青天空留在人物后面）；`qhCylinder`（WebGL：把展开图卷到任意回转体上，哑光素胚 / 亮釉高光）；`qhLyrics`（竖排仿宋歌词，唱到时 0.12 s 显出，`fired` 青花色带晕散、`dark` 深色水里用浅色）。示例：`projects/qhc`。
+
+**shadow.js**（背光影戏）：一盏灯、一块幕布，其余都是剪影。**形靠剪影，明暗靠距离**——物件离幕布 `z`（0 = 贴着布，L = 在灯那儿）时，按  `k = L/(L−z)` 绕灯做中心投影，半影按 `z/(L−z)` 变虚；这一条规则就是整个画风。刀口不是画出来的线，而是**从形体里擦掉**的缝，透出来的是背后被照亮的幕布；歌词也一样，一个字一个字"刻穿"。`screenCloth`（受光的幕布：衰减 + 经纬 + 褶皱 + 湿痕）、`lamp`（油灯、焰的呼吸、光晕）、`smoke`（灯烟/檀香，噪声场不是粒子）、`silhouette`（把 `drawFn` 画进图层 → 投影 → 模糊 → 合成，`o.cut` 擦刀缝、`o.edge` 画刀口亮边）、`cutStroke / cutShape / hideEdge / dyeInto / polylineUpTo`（生长的刀线、刀口亮边、渗色）、`screenRain`（幕前的雨丝 + 落在布上的雨点 `hits` + 浸湿的小点）、`carveLyrics`（逐字刻穿的歌词，返回它占的留白带供雨绕开），以及转场 `lightThrough` / `wetOut`。配合 `drawRate: 12`、`background` 设成暗室色。示例：`projects/qhc-ds`。
+
+**lumen.js**（发光数据 / 终端科幻，WebGL2）：**画面上的一切都是光**。纯黑（或近黑）底，主体只由发光的点和细线构成，叠加混合：密处烧成白、边缘保留颜色，泛光把最亮的地方晕开；形靠点云和线框，远近靠大小、亮度和景深（失焦的点变成大而淡的光斑），信息靠极小的等宽字。`paper` 调色板把这条规则反过来：光变成纸上的墨，叠得越多越深（米白纸 + 石墨线 + 朱红点云的技术图纸）。即时模式，一帧一次 GPU 合成：
+
+```js
+const cam = lmOrbit({ yaw: f.t * .2, pitch: .3, dist: 6, shift: [180, 0] });  // 或 lmCamera({ eye, target }) / lmScreen()（像素坐标）
+lmBegin('ice');                                    // 调色板：ice 冰白+青 | ember 香槟白+琥珀 | rose 品红紫 | alert 警报红 | paper 纸+墨
+lmPoints(cam, this.cloud, { size: 1.4, gain: .6, dof: 12 });          // Float32Array xyz…（在 init 里建好）
+lmLines(cam, this.edges, { width: 1.4, color: 'accent', upto: f.p }); // 线段缓冲（LG.seg / LG.poly / LG.grid…）
+lmBig(lmGlow(), 'SIGNAL', W / 2, H / 2, { decode: f.p, t: f.t });     // 画进 lmGlow() 的 2D 内容会和光一起泛光
+lmEnd(g);                                          // 泛光、色调、色差、底色 → 画进 g
+lmHud(g, f, { id: 'c1', name: 'boot', rows: [['points', 140000]] });  // 清晰的文字画在最上面
+lmTerminal(g, f);
+```
+
+- 颜色参数都可以写 `'#hex'`、`[r, g, b]`（0..1）或调色板键名 `'fg' 'dim' 'accent' 'hot' 'warn'`；`lmBegin('ice', { accent: '#9cf' })` 只改这一镜。
+- `lmPoints(cam, P, o)`：`size`（对焦距离处的像素半径，近大远小）、`gain`、`color` 或 `colors`（每点 rgb）、`sizes`（每点倍数）、`dof`（无穷远处的弥散像素，按 |深度 − 焦距| 变大，点会变成等能量的光斑）、`focus`（默认相机到目标的距离）、`blur`（平面模糊，`lmScreen()` 时用）、`fog`（亮度减半的距离）、`twinkle` + `t`（闪烁）、`drift` + `t`（每点绕原位飘动，世界单位）、`count`（只画前 n 个：逐步出现）、`model`。
+- `lmLines(cam, S, o)`：线段每段 8 个数（a xyz、b xyz、亮度、端头：1 = a 端圆头、2 = b 端、3 = 两端；折线内部是平接，所以叠加不会在拐点出亮点）。`width`（像素）、`color`、`gain`、`glow`（贴身光晕 0..1）、`glowR`、`upto`（0..1 按顺序画出，生长的尖端是圆头）、`dash: [实, 虚]`、`dof`、`fog`、`model`。
+- `model: { pos, rot: [rx, ry, rz], scale }` 在 GPU 上变换；标签要跟着转动的点走时用 `cam.project(lmXf(model, p))` → `[x, y, 深度]`。
+- `lmEnd(g, o)`：`bloom`（强度）、`radius`（0..1 光晕宽度）、`levels`、`exposure`、`ca`（边缘色差）、`lens`（边缘压暗）、`blend: 'screen'`（不画底色，把光叠到 g 上已有的画面上）。一帧里可以 begin / end 多次。
+- 形状 `LG`：点云 `sphere`（斐波那契球面）`ball` `gauss`（高斯团）`box` `disk`（向日葵盘）`ring` `galaxy`（旋臂星系）`stars`（远处星尘）`text`（文字采样成点，em 单位）`along`（沿折线撒点：粒子尘拉成的线）；线段 `seg`（折线）`pairs` `edges` `poly('tetra'|'cube'|'octa'|'icosa'|'dodeca')` `wirebox` `grid` `circle` `curve` `join`。
+- `lmMorph(A, B, k, o)`：每个点从 A 飞到 B（`stagger` 错开、`swirl` 弧线、`ease`），点数可以不同；`o.out` 复用输出数组。这是这类片子不硬切的转场：一个图形散开、飞成下一个图形。
+- 文字（Canvas 2D，画在 `lmEnd` 之后）：`lmTerminal`（左下终端歌词：`> ` 提示符，唱到的词逐字打出，方块光标在拍子上闪，旧行上移变暗；唱完 `commit` 秒后换新提示符；`status` 是下面一行小字状态，`since` 隐藏之前的行）；`lmCaption`（底部居中字幕：逐字淡入并微微上浮，`track` 字距）；`lmHud`（四角细框 + 左上"镜头号 时间码 名字" + 右上键值读数 + 右下注脚，`on` 用 `lmFlick` 做通电闪烁）；`lmSection(g, 2, 6, '标题', 'SUB')`（章节号）；`lmTag`（小号宽字距标签）；`lmLabel`（圆点 + 折线引线 + 字，`draw` 0..1 动画，纸面模式自动垫底色）；`lmBig`（宽字距大字：`reveal` 逐字出现、`decode` 乱码解出、`glitch` 跳字换色）；`lmCode`（带行号、关键字着色、逐字打出的代码块）；`lmCodeBg`（满屏暗代码纹理，`lmSource('镜头名')` 取这个镜头自己的源码）；`lmCount / lmFmt`（数字滚动和千分位）。字体 `LM_MONO`（等宽）、`LM_SANS`（细黑，中文用苹方 / 思源）。
+- 后期：镜头 `render` 返回 `{ glitch: 0..1 }` 整帧撕裂（横条错位 + RGB 分离 + 少量错位块），放在拍点上；时间线遮罩转场 `wipe: 'glitch'`（新镜头从闪烁的横条里出现）。
+- 配合：`project.post` 设 `grain ≈ 0.03`、`vignette: 0`（暗角在 `lmEnd` 里按调色板做），`background: '#000'`。网格、星尘、几何都在 `init()` 里建好；大数组（> 4096 个数）按对象缓存到 GPU，原地修改要 `arr.__v++`（`lmMorph` 自动做），小数组每次直接上传。
+
+示例：`projects/lumen-demo`（六个镜头，每种调色板和主要技法各一个）。
+
 写新风格包的建议：只放"这种画风在任何歌里都用得上"的东西（笔触、质感、特效、文字风格）；角色、道具、具体场景放在项目的 `lib/` 里。
 
 ## 性能
