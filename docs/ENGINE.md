@@ -59,9 +59,10 @@ MV.timeline(({ lyrics, audio, cut, after, start, T0, T1 }) => [
 - `cut(q, nth)`：第 nth 个包含 q 的歌词行，其第一个词开始之前的那一拍。
 - `after(q, nth)`：这一行结束处最近的小节头。
 - `start(q, nth)`：这一行第一个词开始的时间。
-- 条目首尾相接就是硬切；只有写了 `fadeIn` 且重叠时才交叉淡化。
+- 条目首尾相接就是硬切；只有写了 `fadeIn` 且重叠时才交叉淡化。前一个条目要一直延续到 `from + fadeIn`，否则它一结束，淡化到一半的画面会跳成新镜头。
 - 遮罩转场：条目写 `fadeIn: 秒数, wipe: '名字'`，新镜头就透过遮罩出现（代替交叉淡化）。遮罩用 `MV.wipe('名字', { mask(m, k, e, t), over(g, k, e, t) })` 定义：在 `m` 上画白色的地方显示新镜头，`k` 是 0..1 进度，`e.params` 可放转场参数；`over` 可选，在合成结果上再画一层（比如湿边）。风格包 ink.js 自带 `ink`（墨滴晕开，`params.wx / wy` 定中心）和 `wash`（水痕横扫，`params.dir = ±1`）。
 - 同一个场景可以出现多次，用 `params` 区分。
+- `MV.lint()` 检查剪辑里单看一帧发现不了的问题，返回 `[{t, kind, msg}]`：`gap`（空档）、`hidden`（重叠但没有 `fadeIn`）、`fade`（淡化放不完或没有重叠）、`wipe`（未定义的遮罩）、`repeat`（同场景同参数连着出现）、`offbeat`（切点不在拍上也不在唱到的字上，±1 帧；没有 audio.js 时不查）、`linetail`（句尾的字离下一句不到 `lineTail` 秒，默认 0.65）。`render.py check` 打印它们，预览在镜头条上画红色短线。`project.lint = { lineTail, off: ['offbeat', …] }` 调整。
 
 ## 数据
 
@@ -163,4 +164,4 @@ return { press: { mis: 1.5 + 3 * f.a.kick, grain: .03, vig: .35, flash: 0 } };  
 
 WebGL 要跑在 GPU 上才快：导出时 `render.py` 已经请求 GPU（macOS 上用 Metal；`MV_ANGLE` 环境变量可改），`render.py … check` 会打印 WebGL 用的是什么渲染器，写着 software / SwiftShader 就是软件渲染，pigment.js 会慢很多。
 
-导出：`render.py` 把帧分成 `--workers` 段（默认按 CPU 核数，最多 4），每段一个无头浏览器 + 一个 x264 并行渲染，最后无损拼接再合上歌。帧以 JPEG（质量 0.98）传出页面；`--png` 改成无损 PNG（每帧慢约 1.7 倍）。因为每一帧只由 t 决定，并行和逐帧渲染的结果一样。
+导出：`render.py` 把帧分成 `--workers` 段（默认按 CPU 核数，最多 4），每段一个无头浏览器 + 一个 x264 并行渲染，最后无损拼接再合上歌。帧以 JPEG（质量 0.98）传出页面；`--png` 改成无损 PNG（每帧慢约 1.7 倍）。因为每一帧只由 t 决定，并行和逐帧渲染的结果一样。画面按 BT.709 矩阵转成 YUV，并在文件里标明 BT.709（原色、传输曲线、矩阵、tv 范围）。

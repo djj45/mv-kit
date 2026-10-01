@@ -7,12 +7,13 @@
   uv run tools/render.py projects/my-song sheet --cuts      # 3 frames per shot (start / middle / end)
   uv run tools/render.py projects/my-song sheet --n 24      # 24 evenly spaced frames
   uv run tools/render.py projects/my-song strip --t 40.2 --dur 1.2   # a frame every 0.2 s from 40.2 s (key actions)
-  uv run tools/render.py projects/my-song check             # load, list shots, render one frame per shot, report errors
+  uv run tools/render.py projects/my-song check             # load, list shots, render one frame per shot, report errors,
+                                                            # then the edit's problems no frame shows (MV.lint)
 
 Video: the frames are split into --workers contiguous segments, each rendered by its own headless browser and
 x264 encoder in parallel, then joined losslessly (no re-encode) and muxed with the song. Frames travel from the
 page as JPEG (quality 0.98, ~47 dB against lossless; x264 at crf 18 loses more than that); --png sends lossless
-PNG frames instead (about 1.7x slower per frame).
+PNG frames instead (about 1.7x slower per frame). The video is BT.709, converted and tagged as such.
 
 Options: --fps N (override), --samples N (motion blur: average N sub-frames), --shutter 0.5 (fraction of a
 frame), --crf 18, --preset slow, --tune animation|film|grain, --workers N (0 = auto), --png, --noaudio,
@@ -34,7 +35,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from mvproject import load_project  # noqa: E402
+from mvproject import check_audio, load_project  # noqa: E402
 
 ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 ap.add_argument('project')
@@ -151,6 +152,8 @@ def report_browser_errors(errors):
 
 def main():
     from playwright.sync_api import sync_playwright
+    for w in check_audio(cfg):
+        print('warning:', w)
     if a.mode == 'video':
         return video()
     errors, scene_errors = [], {}
@@ -181,6 +184,11 @@ def main():
                 ms = time.time()
                 frame((s['from'] + s['to']) / 2, 1)
                 print(f"  {s['from']:8.3f} – {s['to']:8.3f}  {s['name']:<16} {(time.time() - ms) * 1000:6.0f} ms")
+            lint = info.get('lint') or []
+            if lint:
+                print(f'timeline / lyric notes ({len(lint)}; red ticks on the preview\'s shot strip; project.lint tunes them):')
+                for w in lint:
+                    print(f"  {w['t']:8.2f}  {w['kind']:<8} {w['msg']}")
             print('OK' if not scene_errors and not errors else 'ERRORS above')
 
         else:
@@ -266,7 +274,11 @@ def video():
     out.parent.mkdir(parents=True, exist_ok=True)
     segdir = out.parent / f'.{out.stem}.segs-{os.getpid()}'
     segdir.mkdir()
-    enc = ['-c:v', 'libx264', '-preset', a.preset, '-crf', str(a.crf), '-pix_fmt', 'yuv420p']
+    # The frames are sRGB. Convert them with the BT.709 matrix and say so in the file: left untagged (or tagged with
+    # JPEG's BT.601 matrix), players and upload transcoders that assume BT.709 for HD shift the colours (saturated
+    # reds by ~9 levels).
+    enc = ['-vf', 'scale=out_color_matrix=bt709:out_range=tv,format=yuv420p', '-c:v', 'libx264', '-preset', a.preset,
+           '-crf', str(a.crf), '-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709', '-color_range', 'tv']
     if a.tune:
         enc += ['-tune', a.tune]
 

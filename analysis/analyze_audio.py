@@ -3,6 +3,7 @@
 
   uv run analysis/analyze_audio.py projects/my-song [--bpm-range 70 180] [--bpm 128] [--meter 4]
                                                     [--downbeat-shift 1] [--tracker grid|dp] [--plot]
+  uv run analysis/analyze_audio.py projects/my-song --pin     # only record which file the data belongs to
 
 What it finds (numpy + scipy + ffmpeg only):
   * a beat grid. Default `grid`: one constant tempo + phase fitted to the attacks of the whole song, then
@@ -15,9 +16,12 @@ What it finds (numpy + scipy + ffmpeg only):
   * kick / snare / hat onsets (from stems/drums.wav if present, else from a percussive separation of
     the mix), a general `onset` list, and 100 fps envelopes rms / low / mid / high (+ one per stem).
 Stems: run analysis/separate.py first for cleaner drums and vocals (optional).
+audio.json also records the song's sha256 and size: render.py warns when the project's song is no longer that
+file (another master shifts every cut and word). --pin adds them to an older audio.json without re-analysing.
 The grid search and onset detectors adapt ideas from pdoom-video/analysis/analyze.py (MIT).
 """
 import argparse
+import json
 import math
 import sys
 from pathlib import Path
@@ -27,7 +31,7 @@ from scipy.ndimage import median_filter, uniform_filter1d
 from scipy.signal import butter, find_peaks, sosfiltfilt
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'tools'))
-from mvproject import audio_path, decode, load_project, stems_dir, write_data  # noqa: E402
+from mvproject import audio_path, decode, fingerprint, load_project, stems_dir, write_data  # noqa: E402
 
 SR = 22050
 FPS = 100
@@ -255,10 +259,13 @@ def main():
     ap.add_argument('--downbeat-shift', type=int, default=0, help='move bar 1 by N beats after detection')
     ap.add_argument('--tracker', choices=['grid', 'dp'], default='grid')
     ap.add_argument('--plot', action='store_true', help='write data/audio_qa.png (needs matplotlib)')
+    ap.add_argument('--pin', action='store_true', help='only record the song\'s fingerprint in an existing audio.json')
     a = ap.parse_args()
 
     cfg = load_project(a.project)
     src = audio_path(cfg)
+    if a.pin:
+        return pin(cfg, src)
     print(f'decoding {src.name} …')
     x = decode(src, SR)
     dur = len(x) / SR
@@ -381,7 +388,7 @@ def main():
     r3 = lambda v: [round(float(t), 3) for t in v]
     pairs = lambda ts, ss: [[round(float(t), 3), round(float(s), 2)] for t, s in zip(ts, ss)]
     doc = {
-        'version': 1, 'source': src.name, 'duration': round(dur, 3), 'bpm': round(float(bpm), 3), 'beat_period': round(float(P), 5),
+        'version': 1, 'source': src.name, **fingerprint(src), 'duration': round(dur, 3), 'bpm': round(float(bpm), 3), 'beat_period': round(float(P), 5),
         'meter': m, 'tracker': a.tracker, 'beats': r3(beats), 'downbeats': r3(downbeats), 'sections': sections,
         'fps': FPS, 'env': {k: np.round(v[:nfr], 3).tolist() for k, v in envs.items()},
         'onsets': {'kick': pairs(kick_t, strength01(kick_db)), 'snare': pairs(snare_t, strength01(snare_db)),
@@ -395,6 +402,33 @@ def main():
     print(f'{len(beats)} beats, {len(downbeats)} bars, {len(kick_t)} kicks, {len(snare_t)} snares, {len(hat_t)} hats -> {f}')
     if a.plot:
         qa_plot(cfg, x, doc)
+
+
+def pin(cfg, src):
+    """Add the song's fingerprint to an audio.json written before analyses recorded it. Refuses when the decoded
+    length differs from the analysed one: then this is another file, and the data should be redone instead."""
+    j = cfg['_dir'] / 'data' / 'audio.json'
+    if not j.exists():
+        raise SystemExit(f'{j} not found: run the analysis first')
+    doc = json.loads(j.read_text(encoding='utf-8'))
+    dur = len(decode(src, SR)) / SR
+    if abs(dur - doc.get('duration', dur)) > 0.02:
+        raise SystemExit(f'{src.name} decodes to {dur:.3f} s but audio.json was made from {doc["duration"]} s of audio: '
+                         f'not the same file. Re-run the analysis (and align_lyrics.py) instead of pinning.')
+    fp = fingerprint(src)
+    if doc.get('sha256') == fp['sha256']:
+        print(f'{src.name}: already recorded')
+        return
+    out = {}
+    for k, v in doc.items():              # keep the key order: the fingerprint goes after 'source'
+        if k not in fp:
+            out[k] = v
+        if k == 'source':
+            out.update(fp)
+    if 'sha256' not in out:
+        out.update(fp)
+    write_data(cfg, 'audio', out)
+    print(f'{src.name}: sha256 {fp["sha256"][:12]}…, {fp["bytes"]} bytes -> {j}')
 
 
 def qa_plot(cfg, x, doc):

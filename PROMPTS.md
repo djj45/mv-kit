@@ -82,3 +82,5 @@
 - **速度不稳的现场录音**：`analyze_audio.py … --tracker dp`。
 - **鼓点不准**：先用 `separate.py` 分轨，再重新分析。
 - **导出太慢**：先用 `--preset veryfast` 看动态，最后一遍再用默认参数加 `--samples`。
+- **换了电脑 / 新 clone，没有歌词数据**：把歌词写回 `lyrics.txt`，运行 `uv run tools/lyric_timing.py merge projects/<项目>`，时间和校准从 `data/timing.json` 还原。
+- **提示歌曲不是分析时那一份**：换回原来的文件；确实要换，就重新跑 `analyze_audio.py` 和 `align_lyrics.py`。

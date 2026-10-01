@@ -16,11 +16,13 @@ MV.start = async function () {
   cv.width = W; cv.height = H;
   const ctx = cv.getContext('2d');
   const P = MV.project;
+  let lint = [];
+  try { lint = MV.lint(); } catch (err) { console.error('MV.lint failed:', err); }
 
   if (q.has('export')) {
     document.body.classList.add('export');
     G.MV_EXPORT = {
-      info: { title: P.title, from: P.from, to: P.to, fps: P.fps, width: W, height: H, audio: P.audio, warnings: MV.warnings,
+      info: { title: P.title, from: P.from, to: P.to, fps: P.fps, width: W, height: H, audio: P.audio, warnings: MV.warnings, lint,
               shots: MV.entries.map(e => ({ name: e.name, scene: e.scene, from: e.from, to: e.to })) },
       frame(t, samples = 1, shutter = 0.5, type = 'image/png', quality = 0.95) { MV.lastError = null; MV.renderAt(ctx, t, { samples, shutter }); return cv.toDataURL(type, quality); },
       error: () => MV.lastError,
@@ -44,6 +46,7 @@ MV.start = async function () {
   bar.innerHTML = `<span id="mvinfo"></span><canvas id="mvstrip" height="40"></canvas><span>space ▶ · d debug · [ ] shots · l loop · h hide · s PNG</span>`;
   document.body.appendChild(bar);
   const warn = document.createElement('div'); warn.id = 'mvwarn'; warn.textContent = MV.warnings.join('\n'); document.body.appendChild(warn);
+  if (lint.length) console.warn(`mv-kit check: ${lint.length} timeline / lyric notes (red ticks on the shot strip)\n` + lint.map(w => `${w.t.toFixed(2).padStart(8)}  ${w.kind.padEnd(8)} ${w.msg}`).join('\n'));
   const info = document.getElementById('mvinfo'), strip = document.getElementById('mvstrip'), sg = strip.getContext('2d');
 
   const audio = new G.Audio(); audio.preload = 'auto'; if (P.audio) audio.src = P.audio;
@@ -65,6 +68,7 @@ MV.start = async function () {
     sg.clearRect(0, 0, strip.width, 40);
     MV.entries.forEach((e, i) => { sg.fillStyle = `hsl(${(i * 67) % 360},35%,${e === loop ? 45 : 28}%)`; sg.fillRect(X(e.from), 0, X(e.to) - X(e.from) - 1, 26); });
     sg.fillStyle = 'rgba(255,255,255,0.35)'; for (const d of MV.audio.downbeats) if (d >= a && d <= b) sg.fillRect(X(d), 26, 1, 14);
+    sg.fillStyle = '#ff3b3b'; for (const w of lint) if (w.t >= a && w.t <= b) sg.fillRect(X(w.t) - 1, 0, 2, 8);   // MV.lint findings
     sg.fillStyle = '#ff7a3a'; sg.fillRect(X(t) - 1, 0, 3, 40);
   };
   const loopFrame = () => {

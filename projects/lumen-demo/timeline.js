@@ -2,9 +2,9 @@
 // cut() / after() / start() on the lyrics instead of seconds.
 MV.timeline(({ T0, T1 }) => [
   { scene: 'boot', from: T0, to: 4 },
-  { scene: 'galaxy', from: 4, to: 8 },
+  { scene: 'galaxy', from: 4, to: 8.2 },                       // runs under the whole dissolve
   { scene: 'arcs', from: 7.6, to: 12, fadeIn: 0.6 },          // ice → ember: a slow cross-fade
   { scene: 'morph', from: 12, to: 16 },
-  { scene: 'paper', from: 16, to: 20 },
+  { scene: 'paper', from: 16, to: 20.25 },
   { scene: 'alert', from: 19.75, to: T1, fadeIn: 0.5, wipe: 'glitch' },
 ]);

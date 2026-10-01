@@ -63,6 +63,59 @@ MV.setup = async function () {
   for (const [name, def] of Object.entries(MV.scenes)) if (def.init && MV.entries.some(e => e.scene === name)) await def.init.call(def, MV);
 };
 
+/**
+ * Problems in the edit that no single frame shows: `render.py check` prints them, the preview marks them in red
+ * on the shot strip. [{t, kind, msg}] sorted by time. project.lint can tune it: { lineTail: seconds, off: [kinds] }.
+ *   gap      no shot covers this stretch: the background colour shows
+ *   hidden   a shot overlaps the previous one without fadeIn: the previous one is cut short
+ *   fade     a fadeIn that cannot play: no overlap (it is a hard cut), or the previous shot ends mid-dissolve (it pops)
+ *   wipe     a wipe name that is not defined
+ *   repeat   the same scene with the same params twice in a row: one shot, or a missing change
+ *   offbeat  a cut that is neither on a beat nor on a sung word (±1 frame)
+ *   linetail a line's last word starts so close to the next line that it can barely stand whole before the swap
+ *            (the next line comes < lineTail s after it, default 0.65): look at it with a strip
+ */
+MV.lint = function () {
+  const P = MV.project, A = MV.audio, L = MV.lyrics, E = MV.entries, fr = 1 / P.fps, out = [];
+  const o = P.lint || {}, off = new Set(o.off || []);
+  const add = (t, kind, msg) => { if (!off.has(kind)) out.push({ t: +t.toFixed(3), kind, msg }); };
+  const f2 = x => x.toFixed(2);
+  // coverage
+  let reach = P.from;
+  for (const e of E) {
+    if (e.to <= P.from || e.from >= P.to) continue;
+    if (e.from > reach + fr / 2) add(reach, 'gap', `nothing covers ${f2(reach)}–${f2(Math.min(e.from, P.to))} s`);
+    reach = Math.max(reach, e.to);
+  }
+  if (reach < P.to - fr / 2) add(reach, 'gap', `nothing covers ${f2(reach)}–${f2(P.to)} s (the end)`);
+  // neighbours
+  for (let i = 1; i < E.length; i++) {
+    const a = E[i - 1], b = E[i];
+    if (b.from < a.to - fr / 2) {
+      if (!b.fadeIn) add(b.from, 'hidden', `${b.name} starts at ${f2(b.from)} without fadeIn: ${a.name} is hidden for its last ${f2(a.to - b.from)} s`);
+      else if (a.to < b.from + b.fadeIn - fr / 2) add(a.to, 'fade', `${a.name} ends at ${f2(a.to)}, ${f2(b.from + b.fadeIn - a.to)} s before ${b.name}'s ${b.fadeIn} s dissolve finishes: it pops`);
+    } else if (b.fadeIn) add(b.from, 'fade', `${b.name} has fadeIn ${b.fadeIn} but does not overlap ${a.name}: a hard cut (extend ${a.name} to ${f2(b.from + b.fadeIn)})`);
+    if (a.scene === b.scene && JSON.stringify(a.params) === JSON.stringify(b.params)) add(b.from, 'repeat', `${a.name} → ${b.name}: same scene, same params`);
+  }
+  for (const e of E) if (e.wipe && !MV.wipes[e.wipe]) add(e.from, 'wipe', `${e.name}: unknown wipe "${e.wipe}"`);
+  // cuts on the grid (only against a real analysis: without data/audio.js the grid is a placeholder)
+  const onsets = L.words.map(w => w.start);
+  for (const e of A.missing ? [] : E) {
+    const c = e.from;
+    if (c <= P.from + fr / 2 || c >= P.to) continue;
+    const db = Math.abs(A.nearestBeat(c) - c), dw = onsets.reduce((m, s) => Math.min(m, Math.abs(s - c)), Infinity);
+    if (db > fr && dw > fr) add(c, 'offbeat', `cut to ${e.name} at ${f2(c)} s: ${Math.round(db * 1000)} ms off the nearest beat, ${dw === Infinity ? 'no words' : Math.round(dw * 1000) + ' ms off the nearest sung word'}`);
+  }
+  // line ends
+  const tail = o.lineTail ?? 0.65, sung = L.lines.filter(l => l.words.length);
+  for (let i = 0; i + 1 < sung.length; i++) {
+    const l = sung[i], last = l.words[l.words.length - 1], next = sung[i + 1].words[0].start, gap = next - last.start;
+    if (gap < tail && last.start >= P.from && last.start < P.to)
+      add(last.start, 'linetail', `"${last.w}" (end of "${l.text}") starts ${Math.round(gap * 1000)} ms before the next line; look: strip --t ${f2(Math.max(P.from, last.start - 0.25))} --dur 1 --step 0.083`);
+  }
+  return out.sort((a, b) => a.t - b.t);
+};
+
 /** Everything a scene needs about time t, relative to its timeline entry e. */
 function frameFor(e, t) {
   const A = MV.audio, beat = A.beatAt(t), bar = A.barAt(t);

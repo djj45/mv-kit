@@ -1,4 +1,5 @@
 """Shared helpers for the mv-kit Python tools: read project.js, resolve paths, write data files."""
+import hashlib
 import json
 import re
 import subprocess
@@ -78,3 +79,31 @@ def duration(path):
     out = subprocess.run(['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', str(path)],
                          capture_output=True, text=True, check=True).stdout
     return float(out.strip())
+
+
+def fingerprint(path):
+    """sha256 and size of a file: data/audio.json records them for the song it was analysed from."""
+    h = hashlib.sha256()
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(1 << 20), b''):
+            h.update(chunk)
+    return {'sha256': h.hexdigest(), 'bytes': Path(path).stat().st_size}
+
+
+def check_audio(cfg):
+    """Warnings when the project's song is not the file the beats and lyric times were measured on. A different
+    master (other leading silence, a re-encode) shifts every cut and word, and nothing else would notice."""
+    a, d = cfg.get('audio'), cfg['_dir']
+    j = d / 'data' / 'audio.json'
+    if not a or not j.exists() or not (d / a).exists():
+        return []
+    doc = json.loads(j.read_text(encoding='utf-8'))
+    rel = d.relative_to(KIT) if d.is_relative_to(KIT) else d
+    if not doc.get('sha256'):
+        return [f'data/audio.json does not say which file it was analysed from: if {Path(a).name} is that file, '
+                f'record it once with `uv run analysis/analyze_audio.py {rel} --pin`']
+    if fingerprint(d / a)['sha256'] == doc['sha256']:
+        return []
+    return [f'{Path(a).name} is not the file the beats and lyrics were timed on (sha256 differs; that one was '
+            f'{doc.get("bytes", "?")} bytes, {doc.get("duration", "?")} s). If it starts at a different moment every cut '
+            f'and word drifts: use the original file, or re-run analysis/analyze_audio.py and align_lyrics.py']

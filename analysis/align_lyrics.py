@@ -21,6 +21,8 @@ Steps
      (line = index or text contained in the line; word = index or the word itself).
   4. Write lyrics.json/.js and print a report of low-confidence words to check by ear in the preview
      (index.html, press d for the debug overlay that shows the word timings).
+  5. Write data/timing.json: the same timing (and the fixes) without the lyric text, so git can keep it while
+     the lyric files stay local (tools/lyric_timing.py merge rebuilds them from lyrics.txt).
 """
 import argparse
 import json
@@ -330,6 +332,8 @@ def main():
     (PD / 'data' / 'lyrics_report.txt').write_text('\n'.join(rep) + '\n', encoding='utf-8')
     print('\n'.join(rep[:25]) + ('\n  …' if len(rep) > 25 else ''))
     print(f'-> {f}')
+    from lyric_timing import export   # the same timing without the text: data/timing.json, the part git keeps
+    print(f'-> {export(cfg, quiet=True)}')
 
 
 if __name__ == '__main__':
