@@ -19,7 +19,7 @@
 //   dyeInto(g, pts, w, {color, alpha, upto})                 a wash of dye bleeding along a seam
 //   polylineUpTo(pts, u)                                     the prefix of a polyline, for growing cuts
 //   screenRain(g, t, {amount, hits, avoid, wind, seed})      rain in front of the cloth + blots where it lands
-//   carveLyrics(g, f, {x, y, size, lead, hold, fade})        the lyric line, cut through the cloth char by char
+//   carveLyrics(g, f, {x, y, size, lead, hold, fade, preview, scar})   the lyric line, cut through the cloth char by char
 //   wipes: 'lightThrough' (a pool of lamp light opens up), 'wetOut' (a wet front soaks across)
 (function (G) {
 'use strict';
@@ -110,7 +110,6 @@ function screenCloth(g, o = {}) {
   g.fillStyle = gr; g.fillRect(0, 0, W, H);
 
   // folds: soft vertical bands (world-locked, so a panning camera does not slide them)
-  const fg = g.createLinearGradient(0, 0, 0, 0);
   const fgn = g.createLinearGradient(0, 0, W, 0);
   for (let i = 0; i <= 14; i++) {
     const x = W * i / 14, u = (x + off[0]) / 300;
@@ -198,6 +197,7 @@ function smoke(g, t, o = {}) {
 
 // ---------------------------------------------------------------- silhouettes, projected from the lamp
 let SH_LAYER = null;
+const SH_BLUR = new Map();
 function shLayer(res) {
   const w = Math.max(1, Math.round(W * res)), h = Math.max(1, Math.round(H * res));
   if (!SH_LAYER || SH_LAYER.width !== w || SH_LAYER.height !== h) SH_LAYER = mk(w, h);
@@ -228,11 +228,24 @@ function silhouette(g, drawFn, o = {}) {
   if (o.edge) { c.save(); c.setTransform(res, 0, 0, res, 0, 0); c.globalCompositeOperation = 'source-atop'; o.edge(c); c.restore(); }
   const [lx, ly] = o.light || [W * 0.5, H * 0.55];
   const pr = shProject(z, L, o.pen), k = pr.k, blur = (o.blur ?? 1.0) + pr.blur;
+  let src = SH_LAYER;
+  if (blur > 2.4) {                                              // below ~2 px a blur is not worth it
+    // The penumbra is blurred BEFORE the projection, at reduced size: a wide blur needs few pixels. The buffer is
+    // the layer at res / 2^n, n chosen so the blur there stays ≥ ~3 px (still smooth after the upscale).
+    // (A canvas filter's radius is in device px, untouched by the transform, hence blur / k.)
+    const bu = blur / k, n = clamp(Math.floor(Math.log2(bu * res / 3)), 0, 2), rs = res / (1 << n);
+    const bw = Math.max(1, Math.round(W * rs)), bh = Math.max(1, Math.round(H * rs)), key = bw + 'x' + bh;
+    let B = SH_BLUR.get(key); if (!B) SH_BLUR.set(key, (B = mk(bw, bh)));
+    const bc = B.getContext('2d');
+    bc.setTransform(1, 0, 0, 1, 0, 0); bc.globalCompositeOperation = 'source-over'; bc.globalAlpha = 1; bc.clearRect(0, 0, bw, bh);
+    bc.imageSmoothingQuality = 'high'; bc.filter = `blur(${(bu * rs).toFixed(2)}px)`;
+    bc.drawImage(SH_LAYER, 0, 0, bw, bh); bc.filter = 'none';
+    src = B;
+  }
   g.save();
   g.translate(lx, ly); g.scale(k, k); g.translate(-lx, -ly);
-  if (blur > 2.4) g.filter = `blur(${blur.toFixed(2)}px)`;      // below ~2 px it is not worth a full-frame filter
   g.globalAlpha = clamp(o.alpha ?? 1);
-  g.drawImage(SH_LAYER, 0, 0, W, H);
+  g.drawImage(src, 0, 0, W, H);
   g.restore();
   return { k, blur };
 }
@@ -383,14 +396,14 @@ function screenRain(g, t, o = {}) {
 
 // ---------------------------------------------------------------- carved lyrics
 /**
- * The line being sung, cut through the cloth one character at a time: before its start a character is only
- * a faint scar, then the knife goes through it in 0.18 s and the lamp shines through. Returns the band it
- * used ([x0, y0, x1, y1]) so a scene can keep rain and actors out of it.
+ * The line being sung, cut through the cloth one character at a time: up to o.preview s (default 0.3) before
+ * its start a character shows as a faint scar (o.scar alpha, default 0.18), then the knife goes through it in
+ * 0.18 s and the lamp shines through. { preview: Infinity, scar: 0.3 } shows the whole line as scars from the
+ * start (the earlier look). Returns the band it used ([x0, y0, x1, y1]) so a scene can keep rain and actors out.
  */
-let SH_LMODE = 'crisp';
 function carveLyrics(g, f, o = {}) {
   const t = f.t, lines = o.lines ? f.lyrics.lines.filter(l => o.lines.includes(l.i)) : f.lyrics.lines.filter(l => l.words.length);
-  const lead = o.lead ?? 0.30, hold = o.hold ?? 1.4;
+  const lead = o.lead ?? 0.30, hold = o.hold ?? 1.4, preview = o.preview ?? lead, scar = o.scar ?? 0.18;
   let cur = -1;
   for (let i = 0; i < lines.length; i++) if (lines[i].words[0].start - lead <= t) cur = i;
   if (cur < 0) return null;
@@ -409,6 +422,7 @@ function carveLyrics(g, f, o = {}) {
   toks.forEach((tk, i) => { total += g.measureText(tk.text).width + (i < toks.length - 1 && !tk.join ? sp : 0); });
   const x0 = x - total / 2, tk = tick(t);
   const cutOf = s => clamp((t - s) / 0.18);
+  const scarOf = s => scar * fade * (preview === Infinity ? 1 : clamp((t - (s - preview)) / Math.max(preview, 1e-3)));
   const band = [x0 - 30, y - size * 1.1, x0 + total + 30, y + size * 0.5];
 
   const paint = (ctx, mode) => karaoke(ctx, toks, t, x0, y, {
@@ -421,14 +435,14 @@ function carveLyrics(g, f, o = {}) {
         c.fillText(tok.text, tx + jx, ty + jy);
         return;
       }
-      if (mode === 'halo') {                                     // the burnt rim of the cut, keeps the word legible on bright cloth
+      if (mode === 'halo') {                                     // the burnt rim of a cut, keeps the word legible on bright cloth
+        if (cut <= 0) return;
         c.lineJoin = 'round'; c.lineWidth = size * 0.16;
-        c.strokeStyle = `rgba(26,15,17,${(0.34 * fade).toFixed(3)})`;
+        c.strokeStyle = `rgba(26,15,17,${(0.34 * fade * Math.min(1, cut * 3)).toFixed(3)})`;
         c.strokeText(tok.text, tx, ty);
-        if (cut <= 0) { c.fillStyle = `rgba(38,24,20,${(0.30 * fade).toFixed(3)})`; c.fillText(tok.text, tx, ty); }
         return;
       }
-      if (cut <= 0) { c.fillStyle = `rgba(40,26,22,${(0.30 * fade).toFixed(3)})`; c.fillText(tok.text, tx, ty); return; }
+      if (cut <= 0) { const a = scarOf(tok.start); if (a > 0.003) { c.fillStyle = `rgba(40,26,22,${a.toFixed(3)})`; c.fillText(tok.text, tx, ty); } return; }
       const hot = lerp(0.62, 1, cut) * fade;
       c.fillStyle = `rgba(255,226,178,${hot.toFixed(3)})`;
       c.fillText(tok.text, tx + jx, ty + jy);
@@ -442,7 +456,7 @@ function carveLyrics(g, f, o = {}) {
   const gc = gl.getContext('2d');
   gc.setTransform(1, 0, 0, 1, 0, 0); gc.clearRect(0, 0, gl.width, gl.height);
   gc.save(); gc.setTransform(0.25, 0, 0, 0.25, 0, 0);
-  SH_LMODE = 'glow'; paint(gc, 'glow'); SH_LMODE = 'crisp';
+  paint(gc, 'glow');
   gc.restore();
   g.save(); g.globalAlpha = 0.5 * fade;
   g.drawImage(gl, 0, 0, W, H); g.restore();
@@ -452,6 +466,8 @@ function carveLyrics(g, f, o = {}) {
 }
 
 // ---------------------------------------------------------------- wipes
+/** 2D fractal value noise (same formula as ink.js's fbm2, so shadow.js does not need ink.js). */
+function shFbm2(x, y, s = 0, oct = 4) { let v = 0, a = 0.5, f = 1; for (let i = 0; i < oct; i++) { v += a * noise2(x * f, y * f, s + i * 31); a *= 0.5; f *= 2; } return v; }
 MV.wipe('lightThrough', {
   mask(m, k, e) {
     const p = e.params || {}, x = p.wx ?? W / 2, y = p.wy ?? H * 0.58;
@@ -476,7 +492,7 @@ MV.wipe('wetOut', {
     const p = e.params || {}, dir = p.dir ?? 1;
     const X = dir > 0 ? lerp(-260, W + 260, ease.inOutQuad(clamp(k))) : lerp(W + 260, -260, ease.inOutQuad(clamp(k)));
     m.beginPath(); m.moveTo(X, -20);
-    for (let y = 0; y <= H + 20; y += 16) m.lineTo(X + 120 * fbm2(y / 230, e.i, e.i * 5 + 2, 3), y);
+    for (let y = 0; y <= H + 20; y += 16) m.lineTo(X + 120 * shFbm2(y / 230, e.i, e.i * 5 + 2, 3), y);
     m.lineTo(dir > 0 ? W + 600 : -600, H + 20); m.lineTo(dir > 0 ? W + 600 : -600, -20); m.closePath();
     m.fillStyle = '#fff'; m.fill();
   },
