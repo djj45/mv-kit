@@ -10,7 +10,7 @@
   const optional = new Set();
   const data = P.data || ['data/audio.js', 'data/lyrics.js'];
   data.forEach(d => optional.add(d));
-  const list = ['core.js', 'data.js', 'draw.js', 'engine.js', 'player.js'].map(f => engine + f)
+  const list = ['core.js', 'data.js', 'draw.js', 'engine.js', 'transitions.js', 'player.js'].map(f => engine + f)
     .concat((P.kits || []).map(k => engine + '../kits/' + k + '.js'))
     .concat(data)
     .concat(P.scripts || [])

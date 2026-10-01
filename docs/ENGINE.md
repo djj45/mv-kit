@@ -59,10 +59,40 @@ MV.timeline(({ lyrics, audio, cut, after, start, T0, T1 }) => [
 - `cut(q, nth)`：第 nth 个包含 q 的歌词行，其第一个词开始之前的那一拍。
 - `after(q, nth)`：这一行结束处最近的小节头。
 - `start(q, nth)`：这一行第一个词开始的时间。
+- `land(t, dur, pre = 0.7)`：一个 `dur` 秒的转场要"落"在 t 上时它的 `from`：七成动作在 t 之前，余下的在 t 之后收住（`from: land(cut('…'), 0.8), fadeIn: 0.8`）。
 - 条目首尾相接就是硬切；只有写了 `fadeIn` 且重叠时才交叉淡化。前一个条目要一直延续到 `from + fadeIn`，否则它一结束，淡化到一半的画面会跳成新镜头。
-- 遮罩转场：条目写 `fadeIn: 秒数, wipe: '名字'`，新镜头就透过遮罩出现（代替交叉淡化）。遮罩用 `MV.wipe('名字', { mask(m, k, e, t), over(g, k, e, t) })` 定义：在 `m` 上画白色的地方显示新镜头，`k` 是 0..1 进度，`e.params` 可放转场参数；`over` 可选，在合成结果上再画一层（比如湿边）。风格包 ink.js 自带 `ink`（墨滴晕开，`params.wx / wy` 定中心）和 `wash`（水痕横扫，`params.dir = ±1`）。
+- 转场：条目写 `fadeIn: 秒数, wipe: '名字'`，新镜头就按这个转场进来（代替交叉淡化），见下面的"转场"。
 - 同一个场景可以出现多次，用 `params` 区分。
-- `MV.lint()` 检查剪辑里单看一帧发现不了的问题，返回 `[{t, kind, msg}]`：`gap`（空档）、`hidden`（重叠但没有 `fadeIn`）、`fade`（淡化放不完或没有重叠）、`wipe`（未定义的遮罩）、`repeat`（同场景同参数连着出现）、`offbeat`（切点不在拍上也不在唱到的字上，±1 帧；没有 audio.js 时不查）、`linetail`（句尾的字离下一句不到 `lineTail` 秒，默认 0.65）。`render.py check` 打印它们，预览在镜头条上画红色短线。`project.lint = { lineTail, off: ['offbeat', …] }` 调整。
+- `MV.lint()` 检查剪辑里单看一帧发现不了的问题，返回 `[{t, kind, msg}]`：`gap`（空档）、`hidden`（重叠但没有 `fadeIn`）、`fade`（淡化放不完或没有重叠）、`wipe`（未定义的转场、没写 `fadeIn` 的转场、转场自己的检查没通过，比如场景里没有那个锚点）、`repeat`（同场景同参数连着出现）、`offbeat`（切点不在拍上也不在唱到的字上，±1 帧；转场的开始、结束或 `land` 的落点在拍上也算；没有 audio.js 时不查）、`linetail`（句尾的字离下一句不到 `lineTail` 秒，默认 0.65）。`render.py check` 打印它们，预览在镜头条上画红色短线。`project.lint = { lineTail, off: ['offbeat', …] }` 调整。
+
+### 转场
+
+默认是硬切。要转场，就得有东西跨过切点：在 `timeline.js` 里每个 `wipe` 旁边写一句注释，说清楚是什么（"圆窗就是月亮：推进去"）。说不出来就用硬切。
+
+两种写法，都用 `MV.wipe('名字', def)` 定义，`k` 是 0..1 进度，`e` 是新镜头的条目（`e.params` 放转场参数）：
+
+- **遮罩**：`{ mask(m, k, e, t), over(g, k, e, t) }`。在 `m` 上画白色的地方显示新镜头；`over` 可选，在合成结果上再画一层（比如湿边）。ink.js 自带 `ink`（墨滴晕开，`params.wx / wy` 定中心）和 `wash`（水痕横扫，`params.dir = ±1`），shadow.js 自带 `lightThrough` / `wetOut`，lumen.js 自带 `glitch`。
+- **两张画面**：`{ render(g, A, B, k, e, t, prev) }`。`A` 是旧镜头（条目 `prev`）、`B` 是新镜头在 t 时刻的整帧画布，自己画满 `g`。
+
+引擎自带三个两张画面的转场（`engine/transitions.js`）：
+
+| 名字 | 用在什么时候 | 参数 |
+|---|---|---|
+| `zoom` | 匹配剪辑：旧镜头里的一个物体落到新镜头里同一个（或形状呼应的）物体上，推进去（变大）或拉出来（变小）；新画面先从物体里透出来，再铺满 | `match: [a, b]`（矩形 `[x, y, w, h]`、`'full'`，或场景锚点的名字）、`shape: 'rect' \| 'round'`（物体的外形）、`feather`（透出来的软边，0.2）、`blend`（纸面上用 `'darken'`：只有笔画叠在一起，纸还是纸；暗底用 `'lighten'`）、`ease` |
+| `pan` | 两个镜头是同一个空间里相邻的地方，镜头平移过去。方向有语法：`right` 往后的时间，`left` 往前的时间，`down` 更深，`up` 上浮 | `dir`、`gap`（像素）、`ease` |
+| `reflow` | 旧画面拆成颗粒，飞到新画面的笔画上落定（按希尔伯特曲线配对，相邻的还相邻）。笔画 = 和整张画主色调不同的格子，纸上的墨、黑底上的光都适用 | `dot: 'round' \| 'square' \| 'glyph' \| fn(g, x, y, r, rgb, alpha, i, k)`（风格包可以往 `MV.reflowDots` 加）、`count`（1400）、`cell`（8 px）、`size`、`swirl`（弧度）、`threshold`、`boost`、`ghost`（中间留多少两张画的影子） |
+
+**锚点**：场景可以定义 `anchors(f)`，返回 `{ 名字: [x, y, w, h] }`（这个场景自己画面里的像素坐标，算上它的镜头运动），`zoom` 的 `match` 就能写名字，转场跟着物体走。`MV.anchorOf(条目, 名字, t)` 取锚点。锚点名写错时 `check` 会报出来。
+
+**跨过切点的东西**：条目可以写 `carry(g, k, e, t)`，在任何转场（包括交叉淡化）的合成结果上再画一层：一只飞过接缝的鸟、一片落下的花瓣。
+
+```js
+['moon',  land(4, 1.2), { fadeIn: 1.2, wipe: 'zoom', params: { match: ['window', 'moon'], shape: 'round' } }],   // 圆窗就是月亮：推进去
+['shore', 8,            { fadeIn: 0.9, wipe: 'pan', params: { dir: 'right' }, carry: bird }],                   // 夜 → 晨：时间往右
+['glyph', 11,           { fadeIn: 1.4, wipe: 'reflow' }],                                                        // 浪的线条拆开，重组成字
+```
+
+完整示例：`projects/transition-demo`。转场渲染出错时（比如锚点不存在）会像场景报错一样记下来，这一帧退回交叉淡化。
 
 ## 数据
 

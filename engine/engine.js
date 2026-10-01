@@ -17,10 +17,16 @@ MV.timeline = fn => { timelineFn = fn; };
 const initHooks = [];
 MV.onInit = fn => { initHooks.push(fn); };
 /**
- * Masked transitions. MV.wipe('name', { mask(m, k, e, t), over(g, k, e, t) }) — a timeline entry with
- * `fadeIn: seconds, wipe: 'name'` reveals itself through the mask (white = incoming scene) instead of a
- * cross-fade; k = 0..1 progress, e = the incoming entry (e.params for wipe settings). `over` (optional)
- * draws on top of the composite, e.g. a wet edge along the mask front.
+ * Transitions. A timeline entry with `fadeIn: seconds, wipe: 'name'` comes in through MV.wipes[name] instead of a
+ * cross-fade (k = 0..1 progress, e = the incoming entry, e.params for its settings). Two kinds:
+ *   MV.wipe('name', { mask(m, k, e, t), over(g, k, e, t) })   reveal the new shot through a mask (white = new);
+ *        `over` (optional) draws on top of the composite, e.g. a wet edge along the mask front
+ *   MV.wipe('name', { render(g, A, B, k, e, t, prev) })        draw the frame from both pictures: A = the outgoing
+ *        shot (entry prev), B = the incoming one, both W×H canvases at time t. For moves that carry something
+ *        across the cut: engine/transitions.js has zoom (match cut), pan and reflow.
+ * Either kind may add lint(e, prev) -> message(s) for MV.lint. A scene may expose anchors(f) -> { name: [x, y, w, h] }
+ * (canvas px of its own frame at f.t) so a transition can follow an object: MV.anchorOf(entry, spec, t).
+ * An entry's own `carry(g, k, e, t)` draws over any transition: the thing that crosses the cut.
  */
 MV.wipes = {};
 MV.wipe = (name, def) => { MV.wipes[name] = def; return def; };
@@ -44,7 +50,7 @@ MV.setup = async function () {
   MV.lyrics = new MV.Lyrics(D.lyrics);
   MV.audio = new MV.Audio(D.audio, { bpm: P.bpm, duration: P.to || 600 });
   if (P.to == null) P.to = MV.audio.duration || 60;
-  MV.FRAME = mk(W, H); MV.ACC = mk(W, H); MV.XFADE = mk(W, H); MV.MASK = mk(W, H); MV.GRAIN = makeGrain();
+  MV.FRAME = mk(W, H); MV.ACC = mk(W, H); MV.XFADE = mk(W, H); MV.XA = mk(W, H); MV.MASK = mk(W, H); MV.GRAIN = makeGrain();
   for (const fn of initHooks) await fn(MV);
   const L = MV.lyrics, A = MV.audio;
   const helpers = {
@@ -55,6 +61,8 @@ MV.setup = async function () {
     cut: (q, nth = 0) => A.beatBefore(L.get(q, nth).words[0].start),
     /** The downbeat nearest to the end of the nth line containing q. */
     after: (q, nth = 0) => A.nearestDownbeat(L.get(q, nth).end),
+    /** `from` for a transition of dur seconds that lands on t: `pre` of it happens before t, the rest settles after. */
+    land: (t, dur, pre = 0.7) => t - pre * dur,
   };
   if (!timelineFn) throw new Error('No MV.timeline(...) defined (timeline.js)');
   MV.entries = timelineFn(helpers).filter(e => e && e.to > e.from).sort((a, b) => a.from - b.from)
@@ -69,9 +77,9 @@ MV.setup = async function () {
  *   gap      no shot covers this stretch: the background colour shows
  *   hidden   a shot overlaps the previous one without fadeIn: the previous one is cut short
  *   fade     a fadeIn that cannot play: no overlap (it is a hard cut), or the previous shot ends mid-dissolve (it pops)
- *   wipe     a wipe name that is not defined
+ *   wipe     a wipe that is not defined, has no fadeIn, or fails its own lint (e.g. a zoom anchor the scene lacks)
  *   repeat   the same scene with the same params twice in a row: one shot, or a missing change
- *   offbeat  a cut that is neither on a beat nor on a sung word (±1 frame)
+ *   offbeat  a cut that is neither on a beat nor on a sung word (±1 frame); a transition may also end or land there
  *   linetail a line's last word starts so close to the next line that it can barely stand whole before the swap
  *            (the next line comes < lineTail s after it, default 0.65): look at it with a strip
  */
@@ -97,14 +105,26 @@ MV.lint = function () {
     } else if (b.fadeIn) add(b.from, 'fade', `${b.name} has fadeIn ${b.fadeIn} but does not overlap ${a.name}: a hard cut (extend ${a.name} to ${f2(b.from + b.fadeIn)})`);
     if (a.scene === b.scene && JSON.stringify(a.params) === JSON.stringify(b.params)) add(b.from, 'repeat', `${a.name} → ${b.name}: same scene, same params`);
   }
-  for (const e of E) if (e.wipe && !MV.wipes[e.wipe]) add(e.from, 'wipe', `${e.name}: unknown wipe "${e.wipe}"`);
+  E.forEach((e, i) => {
+    if (!e.wipe) return;
+    const wp = MV.wipes[e.wipe];
+    if (!wp) return add(e.from, 'wipe', `${e.name}: unknown wipe "${e.wipe}"`);
+    if (!e.fadeIn) return add(e.from, 'wipe', `${e.name}: wipe "${e.wipe}" without fadeIn never plays (a hard cut)`);
+    if (!wp.lint || !E[i - 1]) return;
+    try { for (const m of [].concat(wp.lint(e, E[i - 1]) || [])) add(e.from, 'wipe', `${e.name} (${e.wipe}): ${m}`); }
+    catch (err) { add(e.from, 'wipe', `${e.name} (${e.wipe}): ${err.message}`); }
+  });
   // cuts on the grid (only against a real analysis: without data/audio.js the grid is a placeholder)
   const onsets = L.words.map(w => w.start);
   for (const e of A.missing ? [] : E) {
     const c = e.from;
     if (c <= P.from + fr / 2 || c >= P.to) continue;
-    const db = Math.abs(A.nearestBeat(c) - c), dw = onsets.reduce((m, s) => Math.min(m, Math.abs(s - c)), Infinity);
-    if (db > fr && dw > fr) add(c, 'offbeat', `cut to ${e.name} at ${f2(c)} s: ${Math.round(db * 1000)} ms off the nearest beat, ${dw === Infinity ? 'no words' : Math.round(dw * 1000) + ' ms off the nearest sung word'}`);
+    // a transition may start on the grid, end on it, or land on it (land(): 70 % before the beat)
+    const at = e.fadeIn ? [c, c + 0.7 * e.fadeIn, c + e.fadeIn] : [c];
+    const off = x => [Math.abs(A.nearestBeat(x) - x), onsets.reduce((m, s) => Math.min(m, Math.abs(s - x)), Infinity)];
+    if (at.some(x => Math.min(...off(x)) <= fr)) continue;
+    const [db, dw] = off(c);
+    add(c, 'offbeat', `cut to ${e.name} at ${f2(c)} s: ${Math.round(db * 1000)} ms off the nearest beat, ${dw === Infinity ? 'no words' : Math.round(dw * 1000) + ' ms off the nearest sung word'}`);
   }
   // line ends
   const tail = o.lineTail ?? 0.65, sung = L.lines.filter(l => l.words.length);
@@ -114,6 +134,19 @@ MV.lint = function () {
       add(last.start, 'linetail', `"${last.w}" (end of "${l.text}") starts ${Math.round(gap * 1000)} ms before the next line; look: strip --t ${f2(Math.max(P.from, last.start - 0.25))} --dur 1 --step 0.083`);
   }
   return out.sort((a, b) => a.t - b.t);
+};
+
+/**
+ * The rect [x, y, w, h] a transition aims at in entry e's picture at time t. spec: [x, y, w, h] as is, 'full' or
+ * nothing for the whole frame, or the name of an anchor the entry's scene returns from anchors(f) (or a static
+ * `anchors` object), so the transition follows that object while it moves.
+ */
+MV.anchorOf = function (e, spec, t) {
+  if (spec == null || spec === 'full') return [0, 0, W, H];
+  if (Array.isArray(spec)) return spec;
+  const def = MV.scenes[e.scene], an = typeof def.anchors === 'function' ? def.anchors.call(def, frameFor(e, t)) : def.anchors;
+  if (!an || !an[spec]) throw new Error(`${e.name}: no anchor "${spec}" (its scene's anchors(f) should return { ${spec}: [x, y, w, h] })`);
+  return an[spec];
 };
 
 /** Everything a scene needs about time t, relative to its timeline entry e. */
@@ -150,18 +183,29 @@ function compose(g, t) {
   const top = act[act.length - 1];
   const k = top.fadeIn && act.length > 1 ? clamp((t - top.from) / top.fadeIn) : 1;
   if (k >= 1) return run(top, g, t);
-  const under = run(act[act.length - 2], g, t);
-  const xg = MV.XFADE.getContext('2d'), over = run(top, xg, t);
-  const wp = top.wipe && MV.wipes[top.wipe];
+  const prev = act[act.length - 2], wp = top.wipe && MV.wipes[top.wipe];
   if (top.wipe && !wp) throw new Error(`timeline: unknown wipe "${top.wipe}"`);
+  const two = wp && wp.render;                             // needs both pictures: A gets its own canvas
+  const under = run(prev, two ? MV.XA.getContext('2d') : g, t);
+  const xg = MV.XFADE.getContext('2d'), over = run(top, xg, t);
   reset(g);
-  if (wp) {
+  if (two) {
+    g.fillStyle = MV.project.background; g.fillRect(0, 0, W, H);
+    g.save();
+    try { wp.render(g, MV.XA, MV.XFADE, k, top, t, prev); }
+    catch (err) {     // report it like a scene error, and dissolve instead
+      console.error(err); MV.lastError = `${top.name} (${top.wipe}): ${err.stack || err}`;
+      reset(g); g.drawImage(MV.XA, 0, 0); g.globalAlpha = k; g.drawImage(MV.XFADE, 0, 0);
+    }
+    g.restore(); reset(g);
+  } else if (wp) {
     const mg = MV.MASK.getContext('2d'); reset(mg); mg.clearRect(0, 0, W, H);
     mg.save(); wp.mask(mg, k, top, t); mg.restore();
     reset(xg); xg.globalCompositeOperation = 'destination-in'; xg.drawImage(MV.MASK, 0, 0); reset(xg);
     g.drawImage(MV.XFADE, 0, 0);
     if (wp.over) { g.save(); wp.over(g, k, top, t); g.restore(); reset(g); }
   } else { g.globalAlpha = k; g.drawImage(MV.XFADE, 0, 0); g.globalAlpha = 1; }
+  if (top.carry) { g.save(); top.carry(g, k, top, t); g.restore(); reset(g); }
   const post = { ...under };
   for (const [key, v] of Object.entries(over)) post[key] = typeof v === 'number' && typeof under[key] === 'number' ? lerp(under[key], v, k) : k > 0.5 ? v : (under[key] ?? v);
   return post;
