@@ -190,6 +190,33 @@ return { press: { mis: 1.5 + 3 * f.a.kick, grain: .03, vig: .35, flash: 0 } };  
 
 快歌光靠缓推会像幻灯片，再加三样：`illGroove(f, cam, src, e)` 让画面跟拍走（每拍一次推近 + 下点头、小节头更重、逐拍左右轻歪、慢速手持漂移、硬切后头 0.2 s 的冲入），返回新的 cam 给 `illCover`，只动画面、不动后画的字；`e` 是强度，直接用段落的 `energy` 最省事。`illSnapCam(f, shots, { every | at, snap, creep })` 在同一张图里按拍切取景（每 `every` 拍从小节线数起，或在 `at` 的时间点），等于不加新图的镜头内剪辑。`illClipImage(id, ct)` 取视频帧包在片段时间 `ct` 的那张画：用插画当首帧做图生视频（`tools/dreamina.py`），打成帧包后替换静帧，人物、头发、云就真的在动。画在瞳孔上的东西（HUD 圆环、映出的光点）要跟着眼睛：`tools/eyetrack.py` 量出帧包每张画眼睛的开合（0 = 闭上）、瞳孔相对第一张的偏移和每次眨眼的起止，写进项目的 spots，代码按片段时间取值，跟着瞳孔走、闭眼时熄掉（pdoom-akari 的 `akEye`）。夜景里的灯要一扇扇亮起来：`tools/lightsoff.py` 找出插画里亮着的窗户（暖色高亮、和粉色地平线分开，一扇窗的几格玻璃合成一组，连同画上的光晕），涂成墙色存成 `<id>off` 帧包，并打印每扇窗的框；镜头画暗的那张，到点时把那扇窗的框从亮的那张画上去（pdoom-akari 的 S17 first_thread）。示例：`projects/pdoom-akari`（`lib/akari.js` 的 `akStill` 是建立在它上面的通用"插画镜头"）。
 
+**print.js**（行式打印机 / ASCII 打印稿，WebGL2）：**整帧就是一卷连续打印纸，一切都是色带敲上去的字**。画面先用 Canvas 2D 画成黑白（+红）的图，再按形状匹配成 Courier 字符（每格 3×3 区域的形状向量找最像的字形，所以线稿会变成 `/ \ | - _`，不是简单的亮度阶梯）；暗部用叠打（同一格再敲 1–2 个 `= X O # M W @`）。文字直接写进文字格，可以 2–4 倍扩展打印。纸、油墨、相机都在一个 GPU 着色器里：14⅞" 绿条纹折叠纸（半英寸一条浅绿、两侧链轮孔、撕边虚线、每 11" 一道齿孔和山折 / 谷折明暗、纸纤维），碳黑色带 + 双色色带的红半边（红字顶上带一点黑边），每个字的锤击力度和上下错位（波浪基线）、色带织纹和磨损，字形图集带 mipmap，所以推到字跟前也清楚。
+
+```js
+init() { this.S = prSheet({ cpi: 15, lpi: 8 }); },          // 画面格的字距行距（10/6 标准、15/8、20/10 更细）；文字格固定 10 cpi × 6 lpi
+render(g, f) {
+  const S = this.S.clear();                                    // 每帧（或按作画张）清空
+  S.g.fillStyle = '#000'; …                                    // 在 sheet px 里画：黑 = 黑墨，'#f00' = 红墨，白 = 纸，灰 = 浓淡
+  S.put(10, 34, 'I SEE SPARKS', { x: 3, red: true });          // 文字格：精确的字；x 扩展打印（xw / xh 分开），strike 叠打，ink 浓淡
+  S.banner('AGI', 66, 8, { h: 14, align: 'center', red: true }); // BANNER：大字由它自己的字母拼成
+  S.box(30, 4, 98, 12, { title: 'MODEL' });                    // +---+ 框；S.knock 把画面挡在外面；S.stencil 用字填满一个形状
+  prPrint(g, S, { cam: { x: W / 2, y: H / 2, z: 0.9, tilt: 0, rot: 0 }, seed: f.tick, key: f.tick });
+}
+```
+
+- 坐标：纸面 x 0..W 是 13.2" 的打印行（10 cpi 时 132 列），纸宽 14⅞"，两侧是链轮孔边；y 沿纸带往下。`prSheet({ oy })` 把一张放在纸带的 y 处（`h` 可以比一屏高，比如一路印下去的长图）；`prPrint(g, [S1, S2], …)` 一条纸上放几张。
+- 相机 `{x, y, z, rot, tilt, spin, fov}` 看着纸面上的点 (x, y)：`z = 1` 打印行正好铺满画面，`z ≈ 0.86` 露出两侧的孔；`tilt`（弧度）让镜头躺下，纸带向画面上方远去（远处按 `fog` 隐进暗处）。`prProject(cam, x, y)` / `prUnproject` 在纸面和屏幕之间换算，用来在纸上叠 2D 的东西。
+- `reveal`：`S.reveal`（或 `o.reveal`）是 sheet px 的 y，它以上已经打好，它穿过的那一行按链式打印机的顺序零散地敲上；`S.revealText = true` 让文字格也服从它，`put(…, { now: true })` 的字（歌词、页眉）不等它。
+- `key`：同一个 key 再来时跳过字形匹配（例如画面只按作画张变化就传 `f.tick`）。用了 key，画面就只能由 `f.tq` 决定。
+- `prSheet({ pic: false })`：只有文字格（BANNER 页、表格、歌词纸条），省掉匹配。`crisp`（形状对比度，1.7；渐变明暗的 3D 物体用 1.0）、`density`（叠打能到的最深，0.72）、`knee`（多亮以下只用一个字）可调。
+- `prSlip(g, S, [x, y, w, h], { rot })`：从同一卷纸上撕下来的一条，压在镜头前（镜头俯冲、旋转时放歌词）；S 的 sheet px 就是屏幕 px。
+- `S.cells()` 列出文字格里打上的字（拆开 BANNER 让字符飞散）；`S.pcell / tcell(x, y)` 像素 → 格子；`S.knock(c0, r0, c1, r1)` 让一块文字格下面不印画面（已有的字留着），`S.erase(…)` 把一块擦回白纸。
+- 纸带的头尾：`prPrint(…, { paperFrom, paperTo })`（纸面 y；一页 11" = `11 * W / 13.2` px，所以停在折痕上就取它的整数倍），之外是暗处——纸打完、纸尾飞走就靠它。
+- 画风规则：图要画成**线稿（线宽约 0.3–0.4 格）+ 实黑 + 少量平灰**，渐变只留给 3D 明暗（会变成字符阶梯）；粗线会变成一列 `0` / `M`。
+- 字体：Courier Prime Regular / Bold（OFL，`kits/fonts/OFL-CourierPrime.txt`），子集化后嵌在 kit 里，所以 Mac 和别的机器打出来一样；BANNER 也用它。配合 `drawRate: 12`、`post.grain ≈ 0.03`、`vignette ≈ 0.2`、`background: '#141312'`、`flashColor` 用纸色。
+
+示例：`projects/pdoom-print`（P(doom) 全曲，46 个镜头；`lib/pp.js` 有逐词打字的歌词、页眉、人形、眼睛和一个 z-buffer 的 3D 曲面光栅化）。
+
 写新风格包的建议：只放"这种画风在任何歌里都用得上"的东西（笔触、质感、特效、文字风格）；角色、道具、具体场景放在项目的 `lib/` 里。
 
 ## 性能
