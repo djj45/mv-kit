@@ -16,7 +16,8 @@ page as JPEG (quality 0.98, ~47 dB against lossless; x264 at crf 18 loses more t
 PNG frames instead (about 1.7x slower per frame). The video is BT.709, converted and tagged as such.
 
 Options: --fps N (override), --samples N (motion blur: average N sub-frames), --shutter 0.5 (fraction of a
-frame), --crf 18, --preset slow, --tune animation|film|grain, --workers N (0 = auto), --png, --noaudio,
+frame), --crf 18, --preset slow, --tune animation|film|grain, --workers N (0 = auto: half the cores, at most 4, fewer when the
+frame packs would not fit in memory that many times), --png, --noaudio,
 --out PATH. Stills and sheets are PNG (--jpeg: JPEG stills).
 Browser: Google Chrome if installed (channel "chrome"), else Playwright's Chromium (`uv run playwright
 install chromium` once). Set CHROME=/path/to/chrome to force one.
@@ -228,7 +229,9 @@ def main():
                     im = Image.open(io.BytesIO(png)).convert('RGB').resize((tw, th), Image.LANCZOS)
                     x, y = (i % cols) * tw, (i // cols) * th
                     sheet.paste(im, (x, y))
-                    shot = next((s['name'] for s in info['shots'] if s['from'] <= t < s['to']), '')
+                    # The LAST entry covering t is the shot being watched: where one shot dissolves in over its
+                    # neighbour, the first match names the shot that is already leaving.
+                    shot = next((s['name'] for s in reversed(info['shots']) if s['from'] <= t < s['to']), '')
                     label = f'{t:.2f}  {shot}'
                     dr.rectangle([x, y, x + 8 + 8 * len(label), y + 18], fill=(0, 0, 0))
                     dr.text((x + 4, y + 3), label, fill=(255, 255, 255))
@@ -238,6 +241,27 @@ def main():
                 print(f)
         report_browser_errors(errors)
         pg.close()
+
+
+def auto_workers():
+    """Half the cores (at most 4), but no more browsers than fit in memory: every browser loads all the frame packs
+    (measured: ~0.8 GB + 6× the packs' size on disk, the decoded drawings included), and the export keeps within 60 %
+    of the machine's RAM. A project with big video packs on an 8–16 GB laptop gets 1–2 workers instead of 4."""
+    nw = max(1, min(4, (os.cpu_count() or 2) // 2))
+    packs = sum((cfg['_dir'] / s).stat().st_size for s in cfg.get('scripts', [])
+                if s.startswith('frames/') and (cfg['_dir'] / s).exists())
+    try:
+        ram = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
+    except (ValueError, OSError, AttributeError):
+        ram = 0
+    if ram and packs:
+        per = 0.8e9 + 6 * packs
+        fit = max(1, int(0.6 * ram // per))
+        if fit < nw:
+            print(f'{fit} worker(s), not {nw}: each browser holds the frame packs ({packs / 1e6:.0f} MB on disk, ~{per / 1e9:.1f} GB '
+                  f'in memory) and this machine has {ram / 1e9:.0f} GB (--workers N overrides)')
+            nw = fit
+    return nw
 
 
 def video():
@@ -265,7 +289,7 @@ def video():
     if n <= 0:
         first.close(); p0.stop()
         sys.exit('nothing to render: --to must be after --from')
-    nw = a.workers or max(1, min(4, (os.cpu_count() or 2) // 2))
+    nw = a.workers or auto_workers()
     nw = max(1, min(nw, math.ceil(n / 48)))          # a worker costs a browser start-up: give each ≥ 2 s of frames
     per = math.ceil(n / nw)
     runs = [(k * per, min(n, (k + 1) * per)) for k in range(nw) if k * per < n]

@@ -18,9 +18,16 @@ Options:
   --start / --dur trim the source (seconds into the clip)
   --rate N        drawings per second to keep (default: project drawRate)
   --width PX      output width (default 960 for clips, 1920 for stills)
-  --quality Q     JPEG quality (default 84)
+  --quality Q     JPEG quality (default 84; 92 for generated clips that the camera zooms into)
+  --sharpen P     unsharp mask of P percent (radius 1.5 px, after resizing): generated video is softer than the
+                  illustration it starts from; 70 brings its lines back close to the still's without halos
   --src-fps N     frame rate of a frame folder (default 24)
   --delogo x,y,w,h  remove a watermark (source pixels), e.g. the generator's "AI生成" tag
+  --add           also list frames/<name>.js in project.js "scripts" (if it is not there yet)
+  --unmark STILL  cover the generator's "AI生成" tag with the same corner of STILL (the picture the clip was made from,
+                  so the corner is the same scene), colour-matched to each frame and feathered; --mark-box x0,y0,x1,y1
+                  (fractions of the frame) is where the tag is (default: 即梦's top-left tag). For a corner that moves
+                  in the clip, use --delogo instead. (The film itself still says it is AI-made: credit + platform label.)
 """
 import argparse
 import base64
@@ -32,10 +39,10 @@ import sys
 import tempfile
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageFilter
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from mvproject import load_project  # noqa: E402
+from mvproject import load_project, save_project  # noqa: E402
 
 IMG = {'.jpg', '.jpeg', '.png', '.webp'}
 
@@ -49,8 +56,12 @@ ap.add_argument('--dur', type=float)
 ap.add_argument('--rate', type=float)
 ap.add_argument('--width', type=int)
 ap.add_argument('--quality', type=int, default=84)
+ap.add_argument('--sharpen', type=float, default=0)
 ap.add_argument('--src-fps', type=float, default=24.0)
 ap.add_argument('--delogo')
+ap.add_argument('--add', action='store_true')
+ap.add_argument('--unmark')
+ap.add_argument('--mark-box', default='0.006,0.012,0.102,0.102')
 a = ap.parse_args()
 
 cfg = load_project(a.project)
@@ -62,10 +73,38 @@ rate = a.rate or cfg.get('drawRate', 12)
 width = a.width or (1920 if still else 960)
 
 
+_patch = {}
+
+
+def unmark(im):
+    """Cover the tag box with the still's pixels there, shifted to the frame's colour around the box, feathered."""
+    import numpy as np
+    w, h = im.size
+    if (w, h) not in _patch:
+        x0, y0, x1, y1 = (float(v) for v in a.mark_box.split(','))
+        bx = (round(x0 * w), round(y0 * h), round(x1 * w), round(y1 * h))
+        still = np.asarray(Image.open(a.unmark).convert('RGB').resize((w, h), Image.LANCZOS), np.float32)
+        f = max(4, round(0.006 * w))                                    # feather width
+        yy, xx = np.mgrid[0:h, 0:w]
+        dx = np.maximum(bx[0] - xx, xx - bx[2]); dy = np.maximum(bx[1] - yy, yy - bx[3])
+        dist = np.maximum(np.maximum(dx, dy), 0)                        # 0 inside the box, px outside
+        alpha = np.clip(1 - dist / f, 0, 1)[..., None]
+        ring = (dist > f) & (dist <= 3 * f)                             # where we read the frame's own colour
+        _patch[(w, h)] = (still, alpha, ring, alpha[..., 0] > 0)
+    still, alpha, ring, near = _patch[(w, h)]
+    fr = np.asarray(im.convert('RGB'), np.float32)
+    shift = fr[ring].mean(0) - still[ring].mean(0)                      # the clip's colour drift since the first frame
+    out = fr.copy()
+    out[near] = (fr * (1 - alpha) + np.clip(still + shift, 0, 255) * alpha)[near]
+    return Image.fromarray(out.astype(np.uint8))
+
+
 def encode(im):
     im = im.convert('RGB')
     if im.width != width:
         im = im.resize((width, round(im.height * width / im.width / 2) * 2), Image.LANCZOS)
+    if a.sharpen > 0:
+        im = im.filter(ImageFilter.UnsharpMask(radius=1.5, percent=int(a.sharpen), threshold=2))
     b = io.BytesIO()
     im.save(b, 'JPEG', quality=a.quality, optimize=True, progressive=False)
     return im.size, 'data:image/jpeg;base64,' + base64.b64encode(b.getvalue()).decode()
@@ -97,7 +136,8 @@ else:
             raise SystemExit('ffmpeg produced no frames')
         frames = []
         for p in outs:
-            size, url = encode(Image.open(p))
+            im = Image.open(p)
+            size, url = encode(unmark(im) if a.unmark else im)
             frames.append(url)
 
 pack = {'t0': a.t0, 'rate': rate, 'w': size[0], 'h': size[1], 'still': still, 'source': src.name}
@@ -113,4 +153,10 @@ span = '' if still else f', {len(frames) / rate:.2f} s from song time {a.t0:g}'
 print(f'{out.relative_to(cfg["_dir"])}: {len(frames)} drawing{"s" * (len(frames) != 1)} at {size[0]}×{size[1]}{span}, {mb:.1f} MB')
 scripts = cfg.get('scripts', [])
 if f'frames/{a.name}.js' not in scripts:
-    print(f'add "frames/{a.name}.js" to "scripts" in project.js')
+    if a.add:
+        at = 1 if scripts[:1] == ['lib/fonts.js'] else 0
+        cfg['scripts'] = scripts[:at] + [f'frames/{a.name}.js'] + scripts[at:]
+        save_project(cfg)
+        print(f'listed "frames/{a.name}.js" in project.js scripts')
+    else:
+        print(f'add "frames/{a.name}.js" to "scripts" in project.js (or run again with --add)')

@@ -6,7 +6,7 @@
 //   paintCumulus(dst, cx, base, width, height, seed, sun)  hard-edged cel cumulus with warm rim bands
 //   drawLit(g, fn, lx, ly, color, alpha)                   draw a character via fn(ctx), add a rim light
 //   focusLines / upLines                                    集中線 focus lines, vertical speed lines
-//   sfx(g, 'ドン', x, y, size, rot, t, at, opts)          katakana sound effect that pops in
+//   sfx(g, 'ドン', x, y, size, rot, t, at, opts)          katakana sound effect that pops in (opts.font / weight: another face)
 //   titleText / lyricRow / bigWord / jpSub                   anime title-card lyric type, subtitles
 const FONT = '"Noto Sans CJK JP","Hiragino Sans","Hiragino Kaku Gothic ProN","Yu Gothic","Noto Sans JP",sans-serif';
 const MONO = '"DejaVu Sans Mono","Menlo","SF Mono",monospace';
@@ -90,7 +90,7 @@ function sfx(g, text, x, y, size, rot, t, at, o = {}) {
   const age = t - at; if (age < 0 || (o.until && t > o.until)) return;
   const tk = tick(t), k = clamp(age / 0.12), s = lerp(1.7, 1, ease.outBack(k));
   g.save(); g.translate(x + (hash(tk, 11) - 0.5) * size * 0.05, y + (hash(tk, 12) - 0.5) * size * 0.05); g.rotate(rot); g.scale(s, s); g.transform(1, 0, -0.2, 1, 0, 0);
-  g.font = `900 ${size}px ${FONT}`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.lineJoin = 'round';
+  g.font = o.font ? `${o.weight || 400} ${size}px ${o.font}` : `900 ${size}px ${FONT}`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.lineJoin = 'round';
   const chars = o.vertical ? [...text] : [text];
   chars.forEach((ch, i) => {
     const yy = o.vertical ? i * size * 0.92 : 0, xx = o.vertical ? Math.sin(i * 1.7) * size * 0.08 : 0;

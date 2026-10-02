@@ -41,4 +41,7 @@ uv run tools/render.py projects/X --from 30 --to 40 --preset veryfast   # 快速
 uv run tools/render.py projects/X                  # 最终导出（并行 --workers N，默认按核数；--png 无损传帧）
 uv run tools/tune_lyrics.py projects/X             # 歌词校准工具（频谱 + 逐字竖线，保存到 data/lyrics_fix.json）
 uv run tools/lyric_timing.py merge projects/X      # 新 clone / 换电脑：用本机 lyrics.txt + data/timing.json 还原歌词数据和校准
+uv run tools/dreamina.py projects/X doctor          # 即梦画布 CLI：版本、schema、实时模型表 → art/dreamina/（生成图片和视频都用它，用户在 Mac 上跑）
+uv run tools/dreamina.py projects/X video B4v       # 免费：传首帧、存草稿、报价；加 --ceiling N 才扣积分并下载到 art/clips/
+uv run tools/dreamina.py projects/X image A2        # 同上，插画（prompts.json），输出 art/<id>.jpg
 ```

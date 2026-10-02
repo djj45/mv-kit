@@ -177,7 +177,7 @@ rotoKara(g, f.t, line, { box: [96, 700, W - 192, 284] });   // 满屏逐词砸�
 return { press: { mis: 1.5 + 3 * f.a.kick, grain: .03, vig: .35, flash: 0 } };   // 印刷参数（project.post.press 是默认值）
 ```
 
-- 帧包：`tools/frames.py` 把 mp4、帧文件夹或单张静帧打成 `frames/<名字>.js`（JPEG data URL，所以双击 index.html 也能预览；file:// 的 `<img>` 会污染画布，WebGL 不收）。默认只留 `drawRate` 张 / 秒、宽 960（静帧 1920）；`--t0` = 片段第一帧对应的歌曲时间，`--delogo` 去水印。kit 在 `onInit` 里预载全部帧包。
+- 帧包：`tools/frames.py` 把 mp4、帧文件夹或单张静帧打成 `frames/<名字>.js`（JPEG data URL，所以双击 index.html 也能预览；file:// 的 `<img>` 会污染画布，WebGL 不收）。默认只留 `drawRate` 张 / 秒、宽 960（静帧 1920）；`--t0` = 片段第一帧对应的歌曲时间，`--start / --dur` 只截片段里稳定的一段（帧包从截取的第一帧算起），`--sharpen 70 --quality 92` 给生成的视频片段（图生视频比它的首帧插画软，镜头一推近就更明显；锐化把线条拉回到接近插画），`--delogo` 去水印，`--add` 顺手把帧包写进 `project.scripts`。插画和图生视频片段用 `tools/dreamina.py`（即梦画布 CLI `dreamina-canvas`，在装了它、登录过的机器上跑：不带 `--ceiling` 只存草稿和报价，带 `--ceiling N` 才扣积分；视频用 first_last_frame 模式，首帧 = `art/<id>.jpg`；提示词在 `art/prompts.json` / `art/clips.json`，输出 `art/<id>.jpg` / `art/clips/<id>.mp4`；`doctor` 把 CLI 版本、schema 和实时模型表存到 `art/dreamina/`），打包视频时 `--width 1920` 保持插画清晰度。kit 在 `onInit` 里预载全部帧包。
 - `rotoFrame(seq, t, o)`：按 `onTwos(t) − t0` 取画（全片的画在同一个作画张上换）；`o.lag`（秒，口型偏晚时提前）、`o.at`（片段内时间，做慢放 / 定格，自己用 `f.tq` 量化）、`o.smooth`。
 - `rotoCel / rotoDraw` 选项：`pal`（`ROTO.PAL` 键名或 `['#hex', …]` 最多 10 色；皮肤色要列进去，不然脸会变成橙色）、`cam {x, y, z, rot}`（任意比例的素材都按铺满裁切；`rot` 时把 `z` 加大盖住四角）、`tick`（传 `f.tick`）、`line / lineTh`（线量 / 阈值）、`tone`（网点）、`shade`（压暗量）、`sat`、`expo`、`flat`（平涂程度）、`lineCol / misCol / shadeCol`、`key + keyCol`（按颜色抠底，出 alpha）、`remap {from, to, amt}`。
 - 调色板 `ROTO.PAL`：`room stage dc sea plug pink blue red mono`；油墨 `ROTO.INK`；字体 `ROTO.F.slab / mincho / mono / monoL`（Anton / Shippori Mincho B1 / JetBrains Mono，项目里嵌字体，见 roto-demo 的 `lib/fonts.js`；没嵌时退回 Impact / 冬青明朝 / Menlo）。
@@ -185,6 +185,10 @@ return { press: { mis: 1.5 + 3 * f.a.kick, grain: .03, vig: .35, flash: 0 } };  
 - 配合：`project.post` 设 `grain: 0, vignette: 0, press: {…}`，`drawRate: 12`。每帧一次 cel 在 Mac 的 GPU 上约几十毫秒；静态的印样在 `init()` 里印好存成画布。
 
 示例：`projects/roto-demo`（P(doom) 最后一段副歌 + 尾声，四个镜头：不唱的视频、静帧当底板、对口型的全身舞台、特写拉远成印样墙）。
+
+**illust.js**（插画 MV：一枚绘 + 撮影 + 动态歌词）：每个镜头是一张完成的插画（常常是文生图），画本身不动，靠镜头（有缓入缓出和停顿的推拉、长图滑移）、在 `init` 里预算一次的撮影处理（高光柔光、调色）、几层代码画的光（浮尘、光斑、透过光）和动态歌词让它动起来。`illImage(id)`（`frames/<id>.js` 帧包里的静帧，kit 自己预载）；`illPrep(src, { glow, glowR, thresh, grade: { tint, amt, lift, liftAmt, sat, gamma, expo } })` 调色 + 高光柔光，返回画布（只在 init 里调）；`illBright(src, n, { box, thresh })` 找图里最亮的局部极大值（窗灯、LED）；`illCam(p, [[p, {x, y, z, rot}, ease], …])` 镜头关键帧；`illCover(g, src, cam)` 铺满裁切画出，返回 `map(u, v) → [x, y]`，代码层用它钉在画面上的物体上（`map.scale` = 原图像素 → 屏幕像素）；光：`illDust`（光束里的浮尘）、`illFlare`、`illRays`（透过光）、`illLeak`（漏光）、`illBokeh`。歌词：`illLineAt(lyrics, t)`（一句从第一个词显示到下一句第一个词）；`illVerse`（逐词上浮淡入，关键词 1.5× 信号色；`y` 是最后一行的基线，多行往上排）、`illSlam`（hook：逐词砸入 + 错位色）、`illSlant`（−6° 片头字幕）、`illQuiet`（小号明朝，原地淡入）、`illOutline`（横跨天空的空心大字，按音节逐字显出）、`illPrompt`（聊天输入框：唱到的词被逐字打出、方块光标、"正在输入"三点）；都接受 `words: [i0, i1)` 只显示一句的一部分；`illPop`（快歌的主歌：逐词大号砸入，正在唱的词抬起、带错位色、跟拍弹一下）；`illSlant` 加 `bounce: true` 时最新的词跟拍弹。字体栈在 `ILL.F.{gothic, display, mincho, dot}`。配合 `drawRate: 12`、`post.grain ≈ 0.04`。
+
+快歌光靠缓推会像幻灯片，再加三样：`illGroove(f, cam, src, e)` 让画面跟拍走（每拍一次推近 + 下点头、小节头更重、逐拍左右轻歪、慢速手持漂移、硬切后头 0.2 s 的冲入），返回新的 cam 给 `illCover`，只动画面、不动后画的字；`e` 是强度，直接用段落的 `energy` 最省事。`illSnapCam(f, shots, { every | at, snap, creep })` 在同一张图里按拍切取景（每 `every` 拍从小节线数起，或在 `at` 的时间点），等于不加新图的镜头内剪辑。`illClipImage(id, ct)` 取视频帧包在片段时间 `ct` 的那张画：用插画当首帧做图生视频（`tools/dreamina.py`），打成帧包后替换静帧，人物、头发、云就真的在动。画在瞳孔上的东西（HUD 圆环、映出的光点）要跟着眼睛：`tools/eyetrack.py` 量出帧包每张画眼睛的开合（0 = 闭上）、瞳孔相对第一张的偏移和每次眨眼的起止，写进项目的 spots，代码按片段时间取值，跟着瞳孔走、闭眼时熄掉（pdoom-akari 的 `akEye`）。夜景里的灯要一扇扇亮起来：`tools/lightsoff.py` 找出插画里亮着的窗户（暖色高亮、和粉色地平线分开，一扇窗的几格玻璃合成一组，连同画上的光晕），涂成墙色存成 `<id>off` 帧包，并打印每扇窗的框；镜头画暗的那张，到点时把那扇窗的框从亮的那张画上去（pdoom-akari 的 S17 first_thread）。示例：`projects/pdoom-akari`（`lib/akari.js` 的 `akStill` 是建立在它上面的通用"插画镜头"）。
 
 写新风格包的建议：只放"这种画风在任何歌里都用得上"的东西（笔触、质感、特效、文字风格）；角色、道具、具体场景放在项目的 `lib/` 里。
 
