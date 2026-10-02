@@ -17,3 +17,9 @@ projects/*/data/lyrics*
 !projects/anime-pdoom/data/lyrics.js
 !projects/anime-pdoom/data/lyrics.json
 !projects/lumen-demo/data/lyrics.js
+# pdoom-akari: the generated video clips (art/clips/, ~420 MB) and the frame packs made from them and from the stills
+# (frames/, ~560 MB) are too big for this repository: they stay on the machine that made them.
+projects/pdoom-akari/art/clips/
+projects/pdoom-akari/frames/
+# the 即梦 CLI's account dump (it carries the user id): never commit it, in any project
+projects/*/art/dreamina/account.json

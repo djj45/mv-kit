@@ -1,0 +1,1024 @@
+{
+  "schemaVersion": "1",
+  "ok": true,
+  "data": {
+    "items": [
+      {
+        "type": "image",
+        "model": "high_aes_general_v50_flash",
+        "modes": [
+          {
+            "name": "i2i",
+            "flags": [
+              {
+                "flag": "--prompt",
+                "required": false,
+                "minLength": 0,
+                "maxLength": 2000
+              },
+              {
+                "flag": "--ratio",
+                "required": false,
+                "values": [
+                  "21:9",
+                  "16:9",
+                  "3:2",
+                  "4:3",
+                  "1:1",
+                  "3:4",
+                  "2:3",
+                  "9:16"
+                ]
+              },
+              {
+                "flag": "--resolution",
+                "required": true,
+                "values": [
+                  "1.5K",
+                  "2K"
+                ]
+              },
+              {
+                "flag": "--count",
+                "required": false,
+                "min": 1,
+                "max": 4
+              }
+            ],
+            "references": {
+              "min": 1,
+              "max": 10,
+              "types": [
+                {
+                  "mediaType": "image",
+                  "min": 1,
+                  "max": 10
+                }
+              ]
+            },
+            "vipRequired": false,
+            "vipResolutions": [
+              "1.5K",
+              "2K"
+            ]
+          },
+          {
+            "name": "t2i",
+            "flags": [
+              {
+                "flag": "--prompt",
+                "required": true,
+                "minLength": 1,
+                "maxLength": 2000
+              },
+              {
+                "flag": "--ratio",
+                "required": false,
+                "values": [
+                  "21:9",
+                  "16:9",
+                  "3:2",
+                  "4:3",
+                  "1:1",
+                  "3:4",
+                  "2:3",
+                  "9:16"
+                ]
+              },
+              {
+                "flag": "--resolution",
+                "required": true,
+                "values": [
+                  "1.5K",
+                  "2K"
+                ]
+              },
+              {
+                "flag": "--count",
+                "required": false,
+                "min": 1,
+                "max": 4
+              }
+            ],
+            "references": {
+              "min": 0,
+              "max": 0,
+              "types": []
+            },
+            "vipRequired": false,
+            "vipResolutions": [
+              "1.5K",
+              "2K"
+            ]
+          }
+        ]
+      },
+      {
+        "type": "image",
+        "model": "jm_image_model_yc_mj82",
+        "modes": [
+          {
+            "name": "i2i",
+            "flags": [
+              {
+                "flag": "--prompt",
+                "required": false,
+                "minLength": 0,
+                "maxLength": 2000
+              },
+              {
+                "flag": "--ratio",
+                "required": true,
+                "values": [
+                  "1:1",
+                  "3:4",
+                  "16:9",
+                  "4:3",
+                  "9:16",
+                  "2:3",
+                  "3:2"
+                ]
+              },
+              {
+                "flag": "--resolution",
+                "required": true,
+                "values": [
+                  "1K",
+                  "2K"
+                ]
+              },
+              {
+                "flag": "--count",
+                "required": false,
+                "min": 1,
+                "max": 4
+              }
+            ],
+            "references": {
+              "min": 1,
+              "max": 20,
+              "types": [
+                {
+                  "mediaType": "image",
+                  "min": 1,
+                  "max": 20
+                }
+              ]
+            },
+            "vipRequired": false
+          },
+          {
+            "name": "t2i",
+            "flags": [
+              {
+                "flag": "--prompt",
+                "required": true,
+                "minLength": 1,
+                "maxLength": 2000
+              },
+              {
+                "flag": "--ratio",
+                "required": true,
+                "values": [
+                  "1:1",
+                  "3:4",
+                  "16:9",
+                  "4:3",
+                  "9:16",
+                  "2:3",
+                  "3:2"
+                ]
+              },
+              {
+                "flag": "--resolution",
+                "required": true,
+                "values": [
+                  "1K",
+                  "2K"
+                ]
+              },
+              {
+                "flag": "--count",
+                "required": false,
+                "min": 1,
+                "max": 4
+              }
+            ],
+            "references": {
+              "min": 0,
+              "max": 0,
+              "types": []
+            },
+            "vipRequired": false
+          }
+        ]
+      },
+      {
+        "type": "image",
+        "model": "seedream_4.0",
+        "aliases": [
+          "4.0"
+        ],
+        "modes": [
+          {
+            "name": "i2i",
+            "flags": [
+              {
+                "flag": "--prompt",
+                "required": false,
+                "minLength": 0,
+                "maxLength": 2000
+              },
+              {
+                "flag": "--ratio",
+                "required": true,
+                "values": [
+                  "21:9",
+                  "16:9",
+                  "3:2",
+                  "4:3",
+                  "1:1",
+                  "3:4",
+                  "2:3",
+                  "9:16"
+                ]
+              },
+              {
+                "flag": "--resolution",
+                "required": true,
+                "values": [
+                  "2K",
+                  "4K"
+                ]
+              },
+              {
+                "flag": "--count",
+                "required": false,
+                "min": 1,
+                "max": 8
+              }
+            ],
+            "references": {
+              "min": 1,
+              "max": 6,
+              "types": [
+                {
+                  "mediaType": "image",
+                  "min": 1,
+                  "max": 6
+                }
+              ]
+            },
+            "vipRequired": false,
+            "vipResolutions": [
+              "4K"
+            ]
+          },
+          {
+            "name": "t2i",
+            "flags": [
+              {
+                "flag": "--prompt",
+                "required": true,
+                "minLength": 1,
+                "maxLength": 2000
+              },
+              {
+                "flag": "--ratio",
+                "required": true,
+                "values": [
+                  "21:9",
+                  "16:9",
+                  "3:2",
+                  "4:3",
+                  "1:1",
+                  "3:4",
+                  "2:3",
+                  "9:16"
+                ]
+              },
+              {
+                "flag": "--resolution",
+                "required": true,
+                "values": [
+                  "2K",
+                  "4K"
+                ]
+              },
+              {
+                "flag": "--count",
+                "required": false,
+                "min": 1,
+                "max": 8
+              }
+            ],
+            "references": {
+              "min": 0,
+              "max": 0,
+              "types": []
+            },
+            "vipRequired": false,
+            "vipResolutions": [
+              "4K"
+            ]
+          }
+        ]
+      },
+      {
+        "type": "image",
+        "model": "seedream_4.1",
+        "aliases": [
+          "4.1"
+        ],
+        "modes": [
+          {
+            "name": "i2i",
+            "flags": [
+              {
+                "flag": "--prompt",
+                "required": false,
+                "minLength": 0,
+                "maxLength": 2000
+              },
+              {
+                "flag": "--ratio",
+                "required": true,
+                "values": [
+                  "21:9",
+                  "16:9",
+                  "3:2",
+                  "4:3",
+                  "1:1",
+                  "3:4",
+                  "2:3",
+                  "9:16"
+                ]
+              },
+              {
+                "flag": "--resolution",
+                "required": true,
+                "values": [
+                  "2K",
+                  "4K"
+                ]
+              },
+              {
+                "flag": "--count",
+                "required": false,
+                "min": 1,
+                "max": 8
+              }
+            ],
+            "references": {
+              "min": 1,
+              "max": 6,
+              "types": [
+                {
+                  "mediaType": "image",
+                  "min": 1,
+                  "max": 6
+                }
+              ]
+            },
+            "vipRequired": false,
+            "vipResolutions": [
+              "4K"
+            ]
+          },
+          {
+            "name": "t2i",
+            "flags": [
+              {
+                "flag": "--prompt",
+                "required": true,
+                "minLength": 1,
+                "maxLength": 2000
+              },
+              {
+                "flag": "--ratio",
+                "required": true,
+                "values": [
+                  "21:9",
+                  "16:9",
+                  "3:2",
+                  "4:3",
+                  "1:1",
+                  "3:4",
+                  "2:3",
+                  "9:16"
+                ]
+              },
+              {
+                "flag": "--resolution",
+                "required": true,
+                "values": [
+                  "2K",
+                  "4K"
+                ]
+              },
+              {
+                "flag": "--count",
+                "required": false,
+                "min": 1,
+                "max": 8
+              }
+            ],
+            "references": {
+              "min": 0,
+              "max": 0,
+              "types": []
+            },
+            "vipRequired": false,
+            "vipResolutions": [
+              "4K"
+            ]
+          }
+        ]
+      },
+      {
+        "type": "image",
+        "model": "seedream_4.5",
+        "aliases": [
+          "4.5"
+        ],
+        "modes": [
+          {
+            "name": "i2i",
+            "flags": [
+              {
+                "flag": "--prompt",
+                "required": false,
+                "minLength": 0,
+                "maxLength": 2000
+              },
+              {
+                "flag": "--ratio",
+                "required": true,
+                "values": [
+                  "21:9",
+                  "16:9",
+                  "3:2",
+                  "4:3",
+                  "1:1",
+                  "3:4",
+                  "2:3",
+                  "9:16"
+                ]
+              },
+              {
+                "flag": "--resolution",
+                "required": true,
+                "values": [
+                  "2K",
+                  "4K"
+                ]
+              },
+              {
+                "flag": "--count",
+                "required": false,
+                "min": 1,
+                "max": 8
+              }
+            ],
+            "references": {
+              "min": 1,
+              "max": 6,
+              "types": [
+                {
+                  "mediaType": "image",
+                  "min": 1,
+                  "max": 6
+                }
+              ]
+            },
+            "vipRequired": false,
+            "vipResolutions": [
+              "4K"
+            ]
+          },
+          {
+            "name": "t2i",
+            "flags": [
+              {
+                "flag": "--prompt",
+                "required": true,
+                "minLength": 1,
+                "maxLength": 2000
+              },
+              {
+                "flag": "--ratio",
+                "required": true,
+                "values": [
+                  "21:9",
+                  "16:9",
+                  "3:2",
+                  "4:3",
+                  "1:1",
+                  "3:4",
+                  "2:3",
+                  "9:16"
+                ]
+              },
+              {
+                "flag": "--resolution",
+                "required": true,
+                "values": [
+                  "2K",
+                  "4K"
+                ]
+              },
+              {
+                "flag": "--count",
+                "required": false,
+                "min": 1,
+                "max": 8
+              }
+            ],
+            "references": {
+              "min": 0,
+              "max": 0,
+              "types": []
+            },
+            "vipRequired": false,
+            "vipResolutions": [
+              "4K"
+            ]
+          }
+        ]
+      },
+      {
+        "type": "image",
+        "model": "seedream_4.6",
+        "aliases": [
+          "4.6"
+        ],
+        "modes": [
+          {
+            "name": "i2i",
+            "flags": [
+              {
+                "flag": "--prompt",
+                "required": false,
+                "minLength": 0,
+                "maxLength": 2000
+              },
+              {
+                "flag": "--ratio",
+                "required": true,
+                "values": [
+                  "21:9",
+                  "16:9",
+                  "3:2",
+                  "4:3",
+                  "1:1",
+                  "3:4",
+                  "2:3",
+                  "9:16"
+                ]
+              },
+              {
+                "flag": "--resolution",
+                "required": true,
+                "values": [
+                  "2K",
+                  "4K"
+                ]
+              },
+              {
+                "flag": "--count",
+                "required": false,
+                "min": 1,
+                "max": 8
+              }
+            ],
+            "references": {
+              "min": 1,
+              "max": 6,
+              "types": [
+                {
+                  "mediaType": "image",
+                  "min": 1,
+                  "max": 6
+                }
+              ]
+            },
+            "vipRequired": false,
+            "vipResolutions": [
+              "4K"
+            ]
+          },
+          {
+            "name": "t2i",
+            "flags": [
+              {
+                "flag": "--prompt",
+                "required": true,
+                "minLength": 1,
+                "maxLength": 2000
+              },
+              {
+                "flag": "--ratio",
+                "required": true,
+                "values": [
+                  "21:9",
+                  "16:9",
+                  "3:2",
+                  "4:3",
+                  "1:1",
+                  "3:4",
+                  "2:3",
+                  "9:16"
+                ]
+              },
+              {
+                "flag": "--resolution",
+                "required": true,
+                "values": [
+                  "2K",
+                  "4K"
+                ]
+              },
+              {
+                "flag": "--count",
+                "required": false,
+                "min": 1,
+                "max": 8
+              }
+            ],
+            "references": {
+              "min": 0,
+              "max": 14,
+              "types": [
+                {
+                  "mediaType": "image",
+                  "min": 0,
+                  "max": 14
+                }
+              ]
+            },
+            "vipRequired": false,
+            "vipResolutions": [
+              "4K"
+            ]
+          }
+        ]
+      },
+      {
+        "type": "image",
+        "model": "seedream_4.7",
+        "aliases": [
+          "4.7"
+        ],
+        "modes": [
+          {
+            "name": "i2i",
+            "flags": [
+              {
+                "flag": "--prompt",
+                "required": false,
+                "minLength": 0,
+                "maxLength": 2000
+              },
+              {
+                "flag": "--ratio",
+                "required": true,
+                "values": [
+                  "21:9",
+                  "16:9",
+                  "3:2",
+                  "4:3",
+                  "1:1",
+                  "3:4",
+                  "2:3",
+                  "9:16"
+                ]
+              },
+              {
+                "flag": "--resolution",
+                "required": true,
+                "values": [
+                  "1K",
+                  "2K",
+                  "4K"
+                ]
+              },
+              {
+                "flag": "--count",
+                "required": false,
+                "min": 1,
+                "max": 8
+              }
+            ],
+            "references": {
+              "min": 1,
+              "max": 6,
+              "types": [
+                {
+                  "mediaType": "image",
+                  "min": 1,
+                  "max": 6
+                }
+              ]
+            },
+            "vipRequired": false,
+            "vipResolutions": [
+              "4K"
+            ]
+          },
+          {
+            "name": "t2i",
+            "flags": [
+              {
+                "flag": "--prompt",
+                "required": true,
+                "minLength": 1,
+                "maxLength": 2000
+              },
+              {
+                "flag": "--ratio",
+                "required": true,
+                "values": [
+                  "21:9",
+                  "16:9",
+                  "3:2",
+                  "4:3",
+                  "1:1",
+                  "3:4",
+                  "2:3",
+                  "9:16"
+                ]
+              },
+              {
+                "flag": "--resolution",
+                "required": true,
+                "values": [
+                  "1K",
+                  "2K",
+                  "4K"
+                ]
+              },
+              {
+                "flag": "--count",
+                "required": false,
+                "min": 1,
+                "max": 8
+              }
+            ],
+            "references": {
+              "min": 0,
+              "max": 14,
+              "types": [
+                {
+                  "mediaType": "image",
+                  "min": 0,
+                  "max": 14
+                }
+              ]
+            },
+            "vipRequired": false,
+            "vipResolutions": [
+              "4K"
+            ]
+          }
+        ]
+      },
+      {
+        "type": "image",
+        "model": "seedream_5.0_lite",
+        "aliases": [
+          "5.0lite"
+        ],
+        "modes": [
+          {
+            "name": "i2i",
+            "flags": [
+              {
+                "flag": "--prompt",
+                "required": false,
+                "minLength": 0,
+                "maxLength": 2000
+              },
+              {
+                "flag": "--ratio",
+                "required": true,
+                "values": [
+                  "21:9",
+                  "16:9",
+                  "3:2",
+                  "4:3",
+                  "1:1",
+                  "3:4",
+                  "2:3",
+                  "9:16"
+                ]
+              },
+              {
+                "flag": "--resolution",
+                "required": true,
+                "values": [
+                  "2K",
+                  "4K"
+                ]
+              },
+              {
+                "flag": "--count",
+                "required": false,
+                "min": 1,
+                "max": 8
+              }
+            ],
+            "references": {
+              "min": 1,
+              "max": 6,
+              "types": [
+                {
+                  "mediaType": "image",
+                  "min": 1,
+                  "max": 6
+                }
+              ]
+            },
+            "vipRequired": false,
+            "vipResolutions": [
+              "4K"
+            ]
+          },
+          {
+            "name": "t2i",
+            "flags": [
+              {
+                "flag": "--prompt",
+                "required": true,
+                "minLength": 1,
+                "maxLength": 2000
+              },
+              {
+                "flag": "--ratio",
+                "required": true,
+                "values": [
+                  "21:9",
+                  "16:9",
+                  "3:2",
+                  "4:3",
+                  "1:1",
+                  "3:4",
+                  "2:3",
+                  "9:16"
+                ]
+              },
+              {
+                "flag": "--resolution",
+                "required": true,
+                "values": [
+                  "2K",
+                  "4K"
+                ]
+              },
+              {
+                "flag": "--count",
+                "required": false,
+                "min": 1,
+                "max": 8
+              }
+            ],
+            "references": {
+              "min": 0,
+              "max": 0,
+              "types": []
+            },
+            "vipRequired": false,
+            "vipResolutions": [
+              "4K"
+            ]
+          }
+        ]
+      },
+      {
+        "type": "image",
+        "model": "seedream_5.0_pro",
+        "aliases": [
+          "5.0pro"
+        ],
+        "modes": [
+          {
+            "name": "i2i",
+            "flags": [
+              {
+                "flag": "--prompt",
+                "required": false,
+                "minLength": 0,
+                "maxLength": 2000
+              },
+              {
+                "flag": "--ratio",
+                "required": false,
+                "values": [
+                  "21:9",
+                  "16:9",
+                  "3:2",
+                  "4:3",
+                  "1:1",
+                  "3:4",
+                  "2:3",
+                  "9:16"
+                ]
+              },
+              {
+                "flag": "--resolution",
+                "required": true,
+                "values": [
+                  "1.5K",
+                  "2K",
+                  "4K"
+                ]
+              },
+              {
+                "flag": "--count",
+                "required": false,
+                "min": 1,
+                "max": 4
+              }
+            ],
+            "references": {
+              "min": 1,
+              "max": 10,
+              "types": [
+                {
+                  "mediaType": "image",
+                  "min": 1,
+                  "max": 10
+                }
+              ]
+            },
+            "vipRequired": false,
+            "vipResolutions": [
+              "1K",
+              "2K",
+              "4K"
+            ]
+          },
+          {
+            "name": "t2i",
+            "flags": [
+              {
+                "flag": "--prompt",
+                "required": true,
+                "minLength": 1,
+                "maxLength": 2000
+              },
+              {
+                "flag": "--ratio",
+                "required": false,
+                "values": [
+                  "21:9",
+                  "16:9",
+                  "3:2",
+                  "4:3",
+                  "1:1",
+                  "3:4",
+                  "2:3",
+                  "9:16"
+                ]
+              },
+              {
+                "flag": "--resolution",
+                "required": true,
+                "values": [
+                  "1.5K",
+                  "2K",
+                  "4K"
+                ]
+              },
+              {
+                "flag": "--count",
+                "required": false,
+                "min": 1,
+                "max": 4
+              }
+            ],
+            "references": {
+              "min": 0,
+              "max": 14,
+              "types": [
+                {
+                  "mediaType": "image",
+                  "min": 0,
+                  "max": 14
+                }
+              ]
+            },
+            "vipRequired": false,
+            "vipResolutions": [
+              "1K",
+              "2K",
+              "4K"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "meta": {
+    "requestId": "20261001222306BA0C1C7BD0B9927624E4"
+  }
+}

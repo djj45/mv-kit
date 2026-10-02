@@ -1,0 +1,13 @@
+{
+  "schemaVersion": "1",
+  "ok": true,
+  "data": {
+    "version": "1.0.2",
+    "commit": "09e50ac",
+    "buildTime": "2026-09-29T09:12:55Z",
+    "edition": "public",
+    "distribution": "cn",
+    "releaseDate": "2026-09-29",
+    "releaseNotes": "改进模型、模式和音色目录的兼容性筛选，减少调用当前 CLI 不支持的能力时出现的失败。"
+  }
+}
