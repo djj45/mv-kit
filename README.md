@@ -10,13 +10,14 @@
 ```
 mv-kit/
   engine/        渲染引擎（与风格无关）：数据 API、时间线、转场（推拉匹配 / 平移 / 颗粒重组）、后期、运动模糊、预览播放器
-  kits/          风格工具包；anime.js（日本 TV 动画赛璐璐风）、ink.js（水墨）、pigment.js（WebGL 颜料合成层：宣纸 / 素胚 / 青花釉面）、qinghua.js（青花纹饰：勾线、分水、纹样、回转体瓶身、竖排歌词）、lumen.js（发光数据 / 终端科幻：WebGL 点云、光线、景深、泛光，终端歌词和 HUD）、roto.js（转描：把 AI 生成的视频 / 静帧重画成孔版印刷赛璐璐，WebGL）、print.js（行式打印机：画面按形状匹配成 ASCII 字符、叠打、绿条纹连续纸和色带油墨，WebGL）
+  kits/          camera.js（镜头语言：默认缓推、局部放大并跟随、二维转三维、主体不出画）和 layout.js（放进框里的字：表格、面板、自动缩字），每个项目默认带；
+                 风格工具包：anime.js（日本 TV 动画赛璐璐风）、ink.js（水墨）、pigment.js（WebGL 颜料合成层：宣纸 / 素胚 / 青花釉面）、qinghua.js（青花纹饰：勾线、分水、纹样、回转体瓶身、竖排歌词）、lumen.js（发光数据 / 终端科幻：WebGL 点云、光线、景深、泛光，终端歌词和 HUD）、roto.js（转描：把 AI 生成的视频 / 静帧重画成孔版印刷赛璐璐，WebGL）、print.js（行式打印机：画面按形状匹配成 ASCII 字符、叠打、绿条纹连续纸和色带油墨，WebGL）
   analysis/      音乐分析：analyze_audio.py（节拍 / 小节 / 段落 / 鼓点 / 包络）
                  align_lyrics.py（Whisper + 对齐 → 逐词时间），separate.py（可选，Demucs 分轨）
-  tools/         render.py（导出视频 / 截图 / 拼板 / 检查），new_project.py（新建项目），frames.py（把视频 / 静帧打包给 roto.js / illust.js），dreamina.py（用即梦画布 CLI 生成插画和图生视频片段），eyetrack.py（量帧包里眼睛每张画的开合和瞳孔位置），lightsoff.py（把插画里亮着的窗户涂掉并列出来，代码再一扇扇点亮），
+  tools/         render.py（导出视频 / 截图 / 拼板 / 检查 / qa），qa.py（render.py qa：用真实渲染的帧量出唱到的词是否真的显示、字是否出框、主体是否出画、镜头动不动），new_project.py（新建项目），frames.py（把视频 / 静帧打包给 roto.js / illust.js），dreamina.py（用即梦画布 CLI 生成插画和图生视频片段），eyetrack.py（量帧包里眼睛每张画的开合和瞳孔位置），lightsoff.py（把插画里亮着的窗户涂掉并列出来，代码再一扇扇点亮），
                  lyric_timing.py（不含歌词文字的时间：data/timing.json，可以进 git）
   template/      新项目模板：会动的歌词字幕 + 风格圣经模板 TREATMENT.md
-  projects/      你的项目。anime-pdoom 是示例（10 秒二次元 demo），pigment-demo 是 pigment.js 的样张，lumen-demo 是 lumen.js 的样张，roto-demo 是 roto.js 的样张（即梦素材 → 印刷赛璐璐），transition-demo 是转场的样张，pdoom-print 是 print.js 的示例（P(doom) 的 ASCII 打印稿版，全部代码绘制）
+  projects/      你的项目。anime-pdoom 是示例（10 秒二次元 demo），pigment-demo 是 pigment.js 的样张，lumen-demo 是 lumen.js 的样张，roto-demo 是 roto.js 的样张（即梦素材 → 印刷赛璐璐），transition-demo 是转场的样张，kit-demo 是 camera.js / layout.js 和 qa 约定的样张（三个短镜头），pdoom-print 是 print.js 的示例（P(doom) 的 ASCII 打印稿版，全部代码绘制），pdoom-sign 是一轮出片流程的示例（P(doom) 做成工业安全须知：象形小人、警示牌、刻度盘；由 DeepSeek 按 docs/briefs/pdoom-sign 的施工图做出、qa 把关打磨四轮，全部代码绘制）
   docs/ENGINE.md 引擎 API 参考（写镜头时看）
   PROMPTS.md     分阶段提示词手册（和 Claude 一起做新 MV 时用）
   CLAUDE.md      给 Claude 的项目约定（在这个文件夹里用 Claude Code 时自动读取）
@@ -49,6 +50,7 @@ open projects/my-song/index.html
 
 # 5. 写方案和镜头（和 Claude 一起：见 PROMPTS.md），随时出拼板检查
 uv run tools/render.py projects/my-song check          # 每个镜头渲一帧看报错，并列出时间线 / 歌词提示（见下）
+uv run tools/render.py projects/my-song qa             # 量观众看到的问题，有错误就退出码 1，截图在 out/qa/（见下）
 uv run tools/render.py projects/my-song sheet --cuts
 uv run tools/render.py projects/my-song strip --t 40.2 --dur 1.2   # 关键动作：从 40.2 s 起每 0.2 s 一帧
 
@@ -64,6 +66,8 @@ uv run tools/render.py projects/my-song --workers 6           # 并行浏览器�
 颜色按 BT.709 转换并写进文件（高清视频的标准）。不写的话，按 709 解码的播放器和网站转码会让颜色偏移，饱和的红、青最明显（釉里红 #A83A3C 会偏约 9 级）。
 
 `check` 除了渲染报错，还会列出单看一帧发现不了的问题，预览的镜头条上也会用红色短线标出：时间线空档（露出背景色）、重叠却没写 `fadeIn`（前一个镜头被盖掉）、交叉淡化放不完（前一个镜头在淡化完成前结束，画面会跳）、同一场景同样参数连着出现、切点既不在拍上也不在唱到的字上，以及句尾的字离下一句太近（< 0.65 s，句尾字来不及完整停留，用 `strip` 看一眼）。`project.js` 里的 `"lint": { "lineTail": 0.5, "off": ["offbeat"] }` 可以调阈值或关掉某一类。
+
+`qa` 量的是拼板看不出来的东西，全部来自真实渲染的帧：每个词在唱到的那一刻有多少字形真的显示在画面上（带歌词和不带歌词各渲一次，只在这个词的字形像素里比较，所以被盖住、被裁掉、被推出画面、和背景同色都会被量出来）；字有没有跨出它所在的表格 / 标题栏 / 面板（`MV.box`）、四边余量够不够；场景用 `MV.focus` 报出的主体有没有跑出画面；每个镜头（去掉歌词）有没有一直在动；全片歌词字号的跨度和位置分布。每条问题配一张局部放大截图，表格见 `docs/ENGINE.md`「qa」。**没有错误才算做完。**
 
 歌曲换了文件也会提示：`analyze_audio.py` 把歌曲的 sha256 记在 `data/audio.json`，渲染时发现项目里的歌不是分析时那一份（换了母带、片头静音不同），就会警告：所有切点和歌词都会整体错位。老项目用 `uv run analysis/analyze_audio.py projects/my-song --pin` 补记一次。
 

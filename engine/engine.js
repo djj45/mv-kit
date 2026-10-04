@@ -34,9 +34,20 @@ MV.wipe = (name, def) => { MV.wipes[name] = def; return def; };
  * Post filters: MV.postFilter(fn) — fn(canvas, post, t) runs on every finished frame (after motion blur, before
  * shake / zoom, grain, vignette, flash) and may redraw the canvas in place. `post` is the merged post object
  * (project.post + what the scene returned), so a filter can read its own settings from it (e.g. post.pigment).
+ * A filter that moves pixels to other places (a 3D tilt, a ripple) sets post.remapped = true: `render.py qa`
+ * then knows it cannot map that frame's text and leaves it out instead of reporting it hidden.
  */
 MV.postFilters = [];
 MV.postFilter = fn => { MV.postFilters.push(fn); };
+/**
+ * The screen layer: MV.overlay(fn), called from a scene's render(), has fn(o) draw on the finished frame AFTER the
+ * camera (push / insert / warp, shake, zoom, rot, pan) and before invert / grain / vignette / flash / fade. o is a
+ * W×H context in output pixels, state reset; fn runs later in the same frame, so it may use the render's own f.
+ * For what must stay put while the world moves: the lyric zone, a caption, a HUD — the camera can then push in
+ * as far as it likes (MV.keep is not needed there and is ignored). In a cross-fade / wipe an entry's overlay fades
+ * with it (top: k, under: 1 − k). MV.focus / MV.box / MV.group work inside it too (in output px); qa checks it.
+ */
+MV.overlay = fn => { (MV.frameOverlay = MV.frameOverlay || []).push({ fn, entry: MV.curEntry, alpha: MV.curAlpha ?? 1 }); };
 
 const POST_DEFAULTS = { grain: 0.06, vignette: 0.25, vignetteColor: '20,10,30', shake: 0, zoom: 1, rot: 0, flash: 0, flashColor: '255,250,240', fade: 0, invert: false };
 
@@ -50,15 +61,26 @@ MV.setup = async function () {
   MV.lyrics = new MV.Lyrics(D.lyrics);
   MV.audio = new MV.Audio(D.audio, { bpm: P.bpm, duration: P.to || 600 });
   if (P.to == null) P.to = MV.audio.duration || 60;
-  MV.FRAME = mk(W, H); MV.ACC = mk(W, H); MV.XFADE = mk(W, H); MV.XA = mk(W, H); MV.MASK = mk(W, H); MV.GRAIN = makeGrain();
+  MV.FRAME = mk(W, H); MV.ACC = mk(W, H); MV.XFADE = mk(W, H); MV.XA = mk(W, H); MV.MASK = mk(W, H); MV.OVL = mk(W, H); MV.GRAIN = makeGrain();
   for (const fn of initHooks) await fn(MV);
   const L = MV.lyrics, A = MV.audio;
   const helpers = {
     lyrics: L, audio: A, project: P, T0: P.from, T1: P.to,
     /** Start of the first word of the nth line containing q. */
     start: (q, nth = 0) => L.get(q, nth).words[0].start,
-    /** Cut on the beat at/before the first word of the nth line containing q (never after the word). */
-    cut: (q, nth = 0) => A.beatBefore(L.get(q, nth).words[0].start),
+    /**
+     * Cut on the beat at/before the first word of the nth line containing q (never after the word).
+     * o.hold (default project.cutHold, else 0): the previous line's last word must stay this long (s) in the outgoing
+     * shot. When the beat comes sooner after that word, the cut moves onto the line's first sung word instead (still
+     * on the song, never into the next line). 0.2 = 6 frames at 30 fps.
+     */
+    cut: (q, nth = 0, o = {}) => {
+      const line = L.get(q, nth), w0 = line.words[0].start, c = A.beatBefore(w0), hold = o.hold ?? P.cutHold ?? 0;
+      if (!hold) return c;
+      let last = null;
+      for (const l of L.lines) for (const w of l.words) if (l !== line && w.start < w0 - 1e-6 && (!last || w.start > last.start)) last = w;
+      return last && c < last.start + hold ? Math.max(c, w0) : c;
+    },
     /** The downbeat nearest to the end of the nth line containing q. */
     after: (q, nth = 0) => A.nearestDownbeat(L.get(q, nth).end),
     /** `from` for a transition of dur seconds that lands on t: `pre` of it happens before t, the rest settles after. */
@@ -82,6 +104,8 @@ MV.setup = async function () {
  *   offbeat  a cut that is neither on a beat nor on a sung word (±1 frame); a transition may also end or land there
  *   linetail a line's last word starts so close to the next line that it can barely stand whole before the swap
  *            (the next line comes < lineTail s after it, default 0.65): look at it with a strip
+ *   cuttail  a hard cut comes less than cutTail s (default 6 frames) after a line's last word starts: the word
+ *            flashes and is gone. cut(q, n, { hold }) / project.cutHold moves such cuts onto the next line's first word
  */
 MV.lint = function () {
   const P = MV.project, A = MV.audio, L = MV.lyrics, E = MV.entries, fr = 1 / P.fps, out = [];
@@ -133,6 +157,18 @@ MV.lint = function () {
     if (gap < tail && last.start >= P.from && last.start < P.to)
       add(last.start, 'linetail', `"${last.w}" (end of "${l.text}") starts ${Math.round(gap * 1000)} ms before the next line; look: strip --t ${f2(Math.max(P.from, last.start - 0.25))} --dur 1 --step 0.083`);
   }
+  // a hard cut right after a line's last word: the word flashes on for a few frames and the shot is gone
+  const cutTail = o.cutTail ?? 6 / P.fps;
+  for (const e of E) {
+    const c = e.from;
+    if (e.fadeIn || c <= P.from + fr / 2 || c >= P.to) continue;
+    for (const l of sung) {
+      const last = l.words[l.words.length - 1];
+      if (last.start < c - 1e-6 && c - last.start < cutTail - 1e-6)
+        add(c, 'cuttail', `cut to ${e.name} at ${f2(c)} s comes ${Math.round((c - last.start) * P.fps)} frame(s) after "${last.w}" (end of "${l.text}") starts: it flashes. ` +
+          `Use cut(q, n, { hold: ${f2(cutTail)} }) or "cutHold" in project.js`);
+    }
+  }
   return out.sort((a, b) => a.t - b.t);
 };
 
@@ -169,6 +205,7 @@ function reset(g) { g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 1; g.globa
 function run(e, g, t) {
   reset(g); g.save();
   const def = MV.scenes[e.scene];
+  MV.curEntry = e;                                         // MV.focus / MV.box (engine/qa.js) tag what they record with it
   let r;
   try { r = def.render.call(def, g, frameFor(e, t)); }
   catch (err) { g.restore(); reset(g); g.fillStyle = '#400'; g.fillRect(0, 0, W, H); g.fillStyle = '#fff'; g.font = '28px monospace'; g.fillText(`${e.scene}: ${err.message}`, 40, 60); console.error(err); MV.lastError = `${e.scene}: ${err.stack || err}`; return {}; }
@@ -178,6 +215,8 @@ MV.activeAt = t => MV.entries.filter(e => t >= e.from && t < e.to);
 
 /** Draw the scene(s) active at t into g, return their post overrides. */
 function compose(g, t) {
+  MV.frameFocus = []; MV.frameKeep = [];                   // MV.focus / MV.keep (engine/qa.js): this frame's subject and must-stay-visible boxes
+  MV.frameOverlay = []; MV.curAlpha = 1;                   // MV.overlay: this frame's screen layer, and how strongly its entry shows
   reset(g); g.fillStyle = MV.project.background; g.fillRect(0, 0, W, H);
   const act = MV.activeAt(t); if (!act.length) return {};
   const top = act[act.length - 1];
@@ -186,8 +225,11 @@ function compose(g, t) {
   const prev = act[act.length - 2], wp = top.wipe && MV.wipes[top.wipe];
   if (top.wipe && !wp) throw new Error(`timeline: unknown wipe "${top.wipe}"`);
   const two = wp && wp.render;                             // needs both pictures: A gets its own canvas
+  MV.curAlpha = 1 - k;
   const under = run(prev, two ? MV.XA.getContext('2d') : g, t);
+  MV.curAlpha = k;
   const xg = MV.XFADE.getContext('2d'), over = run(top, xg, t);
+  MV.curAlpha = 1;
   reset(g);
   if (two) {
     g.fillStyle = MV.project.background; g.fillRect(0, 0, W, H);
@@ -218,20 +260,39 @@ function compose(g, t) {
 MV.renderAt = function (out, t, opt = {}) {
   const n = Math.max(1, opt.samples | 0), shutter = opt.shutter ?? 0.5, fps = MV.project.fps;
   const fg = MV.FRAME.getContext('2d');
-  let post = {}, src = MV.FRAME;
-  if (n === 1) post = compose(fg, t);
+  let post = {}, src = MV.FRAME, ovs = [];
+  if (n === 1) { post = compose(fg, t); ovs = MV.frameOverlay; }
   else {
     const ag = MV.ACC.getContext('2d');
     for (let i = 0; i < n; i++) {
       const p = compose(fg, t + ((i + 0.5) / n - 0.5) * shutter / fps);
-      if (i === n >> 1) post = p;
+      if (i === n >> 1) { post = p; ovs = MV.frameOverlay; }   // the screen layer is drawn once, sharp, from the middle sub-frame
       reset(ag); ag.globalAlpha = 1 / (i + 1); ag.drawImage(MV.FRAME, 0, 0);
     }
     ag.globalAlpha = 1; src = MV.ACC;
   }
-  applyPost(out, src, t, post);
+  applyPost(out, src, t, post, ovs);
   return post;
 };
+
+/** MV.overlay: each entry's screen layer drawn into MV.OVL, then laid on the output at that entry's strength */
+function drawOverlays(o, ovs) {
+  const og = MV.OVL.getContext('2d'), keep = MV.curEntry, groups = new Map();
+  for (const v of ovs) { if (!groups.has(v.entry)) groups.set(v.entry, []); groups.get(v.entry).push(v); }
+  MV.inOverlay = true;
+  try {
+    for (const [e, list] of groups) {
+      reset(og); og.clearRect(0, 0, W, H);
+      for (const v of list) {
+        MV.curEntry = e; reset(og); og.save();
+        try { v.fn(og); }
+        catch (err) { console.error(err); MV.lastError = `${e ? e.scene : '?'} (overlay): ${err.stack || err}`; }
+        og.restore();
+      }
+      reset(o); o.globalAlpha = clamp(list[0].alpha); o.drawImage(MV.OVL, 0, 0);
+    }
+  } finally { MV.inOverlay = false; MV.curEntry = keep; reset(o); }
+}
 
 function makeGrain() {
   const c = mk(256, 256), g = c.getContext('2d'), im = g.createImageData(256, 256), R = mulberry32(99);
@@ -239,18 +300,23 @@ function makeGrain() {
   g.putImageData(im, 0, 0); return c;
 }
 
-function applyPost(o, src, t, post) {
+function applyPost(o, src, t, post, ovs) {
   const q = { ...POST_DEFAULTS, ...(MV.project.post || {}), ...post }, tk = tick(t);
   reset(o);
   for (const fn of MV.postFilters) fn(src, q, t);
   let sx = 0, sy = 0;
   if (Array.isArray(q.shake)) [sx, sy] = q.shake;
   else if (q.shake) { sx = (hash(tk, 91) - 0.5) * 2 * q.shake; sy = (hash(tk, 92) - 0.5) * 2 * q.shake; }
-  if (sx || sy || q.zoom !== 1 || q.rot) {
+  // shake is a hand: it gets a little extra zoom so the frame edge never shows. pan is a camera move (kits/camera.js):
+  // it is applied as is, so a zoom can be pinned on a point (pan = −(zoom − 1)·(point − centre)).
+  const [px, py] = Array.isArray(q.pan) ? q.pan : [0, 0];
+  if (sx || sy || px || py || q.zoom !== 1 || q.rot) {
     const z = q.zoom * (1 + (Math.abs(sx) + Math.abs(sy)) * 2 / W);
+    MV.lastPost = { sx: sx + px, sy: sy + py, z, rot: q.rot, remapped: !!q.remapped };   // what the picture went through (engine/qa.js maps text and focus with it)
     o.fillStyle = '#000'; o.fillRect(0, 0, W, H);
-    o.save(); o.translate(W / 2 + sx, H / 2 + sy); o.rotate(q.rot); o.scale(z, z); o.translate(-W / 2, -H / 2); o.drawImage(src, 0, 0); o.restore();
-  } else o.drawImage(src, 0, 0);
+    o.save(); o.translate(W / 2 + sx + px, H / 2 + sy + py); o.rotate(q.rot); o.scale(z, z); o.translate(-W / 2, -H / 2); o.drawImage(src, 0, 0); o.restore();
+  } else { MV.lastPost = { sx: 0, sy: 0, z: 1, rot: 0, remapped: !!q.remapped }; o.drawImage(src, 0, 0); }
+  if (ovs && ovs.length) drawOverlays(o, ovs);
   if (q.invert) { o.globalCompositeOperation = 'difference'; o.fillStyle = '#fff'; o.fillRect(0, 0, W, H); o.globalCompositeOperation = 'source-over'; }
   if (q.grain > 0) {
     o.save(); o.globalCompositeOperation = 'overlay'; o.globalAlpha = q.grain;

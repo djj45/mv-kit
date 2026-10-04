@@ -24,7 +24,7 @@ ap.add_argument('--title')
 ap.add_argument('--from', dest='t0', type=float, default=0.0)
 ap.add_argument('--to', dest='t1', type=float)
 ap.add_argument('--fps', type=int, default=24)
-ap.add_argument('--kits', default='', help='comma-separated style kits from kits/, e.g. anime')
+ap.add_argument('--kits', default='', help='comma-separated style kits from kits/, e.g. anime (camera and layout are always added)')
 ap.add_argument('--link', action='store_true', help='reference the audio file in place instead of copying it')
 a = ap.parse_args()
 
@@ -47,8 +47,9 @@ if a.lyrics:
 dur = duration(src_audio)
 cfg = {'_dir': dst, 'title': a.title or a.name, 'audio': audio_rel, 'from': a.t0, 'to': round(a.t1 if a.t1 else dur, 3),
        'fps': a.fps, 'drawRate': 12 if a.fps <= 30 else 15, 'width': 1920, 'height': 1080,
-       'kits': [k for k in a.kits.split(',') if k], 'scripts': [], 'scenes': ['title', 'lyrics'],
-       'post': {'grain': 0.05, 'vignette': 0.25}}
+       'kits': list(dict.fromkeys(['camera', 'layout'] + [k for k in a.kits.split(',') if k])), 'scripts': [], 'scenes': ['title', 'lyrics'],
+       'post': {'grain': 0.05, 'vignette': 0.25},
+       'cutHold': 0.2}   # cut(): a line's last word stays ≥ 0.2 s in the outgoing shot (docs/ENGINE.md, timeline)
 save_project(cfg)
 load_project(dst)  # sanity
 print(f'created {dst}  ({dur:.1f} s of audio)')

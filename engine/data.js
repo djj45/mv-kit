@@ -24,8 +24,19 @@ class Lyrics {
   has(q) { return this.lines.some(l => norm(l.text).includes(norm(q))); }
   /** All words equal to q (punctuation ignored). */
   findWords(q) { const k = norm(q).replace(/[^\p{L}\p{N}']/gu, ''); return this.words.filter(w => norm(w.w).replace(/[^\p{L}\p{N}']/gu, '') === k); }
-  /** The line being sung at t (or the last one started). */
-  lineAt(t) { let cur = null; for (const l of this.lines) if (l.start <= t) cur = l; return cur && t <= cur.end + 0.5 ? cur : null; }
+  /**
+   * The line being sung at t (or the last one started, up to 0.5 s after its end). With `from` (a shot's start, f.from):
+   * the line this SHOT should show — a line that was all sung before the cut is not carried into the shot (it would
+   * flash up restyled for the first frames: qa's lyric-carryover); a line still being sung across the cut (it has a
+   * word starting at or after `from`) is. So in a scene: f.lyrics.lineAt(f.t, f.from).
+   */
+  lineAt(t, from) {
+    let cur = null;
+    for (const l of this.lines) if (l.words.length && l.start <= t) cur = l;
+    if (!cur || t > cur.end + 0.5) return null;
+    if (from != null && cur.words[cur.words.length - 1].start < from - 1e-6) return null;
+    return cur;
+  }
   wordAt(t) { return this.words.find(w => t >= w.start && t < w.end) || null; }
   /** 0..1 sung progress of a word. */
   static wordProgress(w, t) { return clamp((t - w.start) / Math.max(1e-3, w.end - w.start)); }

@@ -9,6 +9,9 @@
   uv run tools/render.py projects/my-song strip --t 40.2 --dur 1.2   # a frame every 0.2 s from 40.2 s (key actions)
   uv run tools/render.py projects/my-song check             # load, list shots, render one frame per shot, report errors,
                                                             # then the edit's problems no frame shows (MV.lint)
+  uv run tools/render.py projects/my-song qa                # measure what a viewer sees: every sung word really on screen,
+                                                            # text inside its boxes, the subject in frame, no dead shots
+                                                            # (tools/qa.py; exit status 1 on errors; crops in out/qa/)
 
 Video: the frames are split into --workers contiguous segments, each rendered by its own headless browser and
 x264 encoder in parallel, then joined losslessly (no re-encode) and muxed with the song. Frames travel from the
@@ -40,7 +43,7 @@ from mvproject import check_audio, load_project  # noqa: E402
 
 ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 ap.add_argument('project')
-ap.add_argument('mode', nargs='?', default='video', choices=['video', 'stills', 'sheet', 'strip', 'check'])
+ap.add_argument('mode', nargs='?', default='video', choices=['video', 'stills', 'sheet', 'strip', 'check', 'qa'])
 ap.add_argument('--from', dest='t0', type=float)
 ap.add_argument('--to', dest='t1', type=float)
 ap.add_argument('--fps', type=int)
@@ -113,7 +116,7 @@ class Page:
         # missing optional data files are reported as warnings by the engine; required ones set MV_FATAL
         self.page.on('console', lambda m: m.type == 'error' and 'Failed to load resource' not in m.text and errors.append(m.text))
         self.page.on('pageerror', lambda e: errors.append(str(e)))
-        self.page.goto((PD / 'index.html').as_uri() + '?export=1')
+        self.page.goto((PD / 'index.html').as_uri() + '?export=1' + ('&qa=1' if a.mode == 'qa' else ''))
         try:
             self.page.wait_for_function('window.MV_READY === true || !!window.MV_FATAL', timeout=120000)
         except Exception:
@@ -174,6 +177,13 @@ def main():
 
         def frame(t, samples=None):
             return pg.frame(t, samples or a.samples, fmt, scene_errors)
+
+        if a.mode == 'qa':
+            import qa
+            code = qa.run(pg, info, a, cfg, OUT)
+            report_browser_errors(errors)
+            pg.close()
+            sys.exit(code)
 
         if a.mode == 'check':
             print(f"{info['title']}: {info['width']}x{info['height']} @ {info['fps']} fps, {info['from']:.2f}–{info['to']:.2f} s")
