@@ -95,9 +95,11 @@ function safeZoom(z, fx, fy, pad) {
   };
   let zm = z;
   for (const b of K) {
-    // a box already touching the edge cannot be helped by zooming less than 1: leave it to qa
-    if (b[0] < pad || b[1] < pad || b[2] > W - pad || b[3] > H - pad) continue;
-    zm = Math.min(zm, lim(b[0], fx, pad, W - pad), lim(b[2], fx, pad, W - pad), lim(b[1], fy, pad, H - pad), lim(b[3], fy, pad, H - pad));
+    if (b[2] < 0 || b[0] > W || b[3] < 0 || b[1] > H) continue;            // wholly off the picture: nothing to keep
+    // a box already closer to an edge than pad may not be pushed any further out than it already is: on that side
+    // its own position is the limit (the zoom stops rather than carry a lyric off the frame)
+    const x0 = Math.min(pad, b[0]), x1 = Math.max(W - pad, b[2]), y0 = Math.min(pad, b[1]), y1 = Math.max(H - pad, b[3]);
+    zm = Math.min(zm, lim(b[0], fx, x0, x1), lim(b[2], fx, x0, x1), lim(b[1], fy, y0, y1), lim(b[3], fy, y0, y1));
   }
   return clamp(zm, 1, z);
 }

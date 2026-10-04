@@ -16,15 +16,30 @@ Every number comes from rendering the real frames (engine/qa.js does the measuri
   lyric-touch    a sung word touches something of its own colour: more than qa.touch (7 %) of the thin ring around its
                  letters (0.06 em) is that colour in the frame without lyrics — a line through it, letters standing on
                  an axis or a plate's border, a door edge the camera pushed under a screen-layer lyric. Reads as struck
-                 through or glued on
+                 through or glued on. Also: drawing of ANY colour running into a word (a grey post or a green chart line through it, rays, dots,
+                 a hand over it) — lines that stand out from the ground touching more than qa.cross (0.6 em) of the
+                 letters' outline in all. A single line straight through a word touches about two line widths per letter.
+                 Every touch finding (lyric-touch, text-touch) also says WHERE, so it can be fixed without opening the crop:
+                 which side of the letters the contact is on, how far along it spans, its colour, its box in px, and the
+                 nearest MV.focus
   text-touch     the same for any other text 24 px and up (a stamp, a title, a big number, a word of the lyric used as
                  decoration), read from the frame itself with the colour it was painted in: a black stamp over a black
                  drawing. Threshold qa.touchText (20 %): a needle over a dial number, a prohibition slash over its
-                 symbol show up here too — keep those on purpose, with a line in TREATMENT
+                 symbol show up here too — keep those on purpose, with a line in TREATMENT. Drawing of another colour
+                 running into it: qa.crossText (0.8 em)
+  lyric-cover    the lyrics hide the picture: the footprint of the lyrics — their glyphs and any bar, plate or block
+                 drawn behind them on the screen layer or inside MV.lyric — against the bare picture (no lyrics). Reported
+                 when it hides more than qa.cover (8 %) of the picture's detail (its edges) AND sits where the picture
+                 is at least 1.5× as busy as average (on the drawing, not in its empty space); or hides 25 % or more;
+                 or sits on the shot's subject (last MV.focus) with picture under it. Looked at on the shot's first
+                 frame and at 15 / 50 / 85 %
   lyric-carryover  a shot draws (restyled, in its own layout) a line that was already sung before the shot began:
                  the previous shot's last line shows up again for the first frames of the next one. A line may cross
                  a cut only while it is still being sung (it has words after the cut); otherwise the new shot shows
                  nothing until its own line starts
+  lyric-handover during a transition (dissolve, zoom, reflow) the outgoing shot draws the incoming shot's line — one
+                 that starts after the cut — in its own layout: the line shows twice, one copy fading out. f.lyrics.lineAt
+                 leaves those lines out (f.until = where the next shot takes over)
   lyric-overlap  two different lyric texts drawn on top of each other (more than 20 % of the smaller one, centres apart):
                  usually two lines, or the same line twice in two layouts, in one place. Not reported: an outline or a
                  drop shadow (centres together), one word doubled, a sung word drawn over its own ghost line (karaoke)
@@ -69,8 +84,8 @@ from collections import defaultdict
 from pathlib import Path
 
 SEV = {'scene-error': 'error', 'lyric-hidden': 'error', 'box-cross': 'error', 'focus-out': 'error',
-       'lyric-faint': 'warn', 'lyric-missing': 'warn', 'lyric-edge': 'warn', 'lyric-carryover': 'warn', 'lyric-overlap': 'warn',
-       'lyric-covered': 'warn', 'lyric-touch': 'warn', 'text-touch': 'warn', 'text-cut': 'warn',
+       'lyric-faint': 'warn', 'lyric-missing': 'warn', 'lyric-edge': 'warn', 'lyric-carryover': 'warn', 'lyric-handover': 'warn', 'lyric-overlap': 'warn',
+       'lyric-covered': 'warn', 'lyric-cover': 'warn', 'lyric-touch': 'warn', 'text-touch': 'warn', 'text-cut': 'warn',
        'box-tight': 'warn', 'box-clash': 'warn',
        'static': 'warn', 'type-flat': 'warn', 'type-band': 'warn'}
 
@@ -85,6 +100,9 @@ def run(pg, info, a, cfg, out_dir):
     freeze = qc.get('freeze', 0.005)
     touch_max = qc.get('touch', 0.07)
     touch_text = qc.get('touchText', 0.2)
+    cross_max = qc.get('cross', 0.6)
+    cross_text = qc.get('crossText', 0.8)
+    cover_max = qc.get('cover', 0.08)
     type_range = qc.get('typeRange', 2.5)
     fps = info['fps']
     W, H = info['width'], info['height']
@@ -180,8 +198,15 @@ def run(pg, info, a, cfg, out_dir):
             if r['solo'] and wr['status'] == 'ok' and wr['vis'] >= 0.5 and (wr.get('touch') or 0) >= touch_max:
                 add('lyric-touch', t, sh, f"\"{w['w']}\" touches something of its own colour: {round(wr['touch'] * 100)} % of the thin ring around its "
                     f"letters is that colour (a line through it, letters standing on an axis or a border, a shape behind): it reads as struck "
-                    f"through or glued on. Give it clear space (≈ 0.06 em all round), or break the line around the word",
+                    f"through or glued on. Give it clear space (≈ 0.06 em all round), or break the line around the word"
+                    + _where((wr.get('geo') or {}).get('sameGeo'), r['focus'], 'word'),
                     box=wr['box'], key=('lyric-touch', sh, w['line']), value=-wr['touch'])
+            elif r['solo'] and wr['status'] == 'ok' and wr['vis'] >= 0.5 and (wr.get('cross') or 0) >= cross_max:
+                add('lyric-touch', t, sh, f"\"{w['w']}\" has drawing running into it: lines or shapes that stand out from the ground touch "
+                    f"{wr['cross']:.1f} em of its letters' outline (a post or a chart line through the word, rays, dots, a hand over it): it "
+                    f"reads as struck through or caged. Move the word into clear space (≈ 0.06 em all round), move the drawing, or stop it "
+                    f"short of the word" + _where((wr.get('geo') or {}).get('crossGeo'), r['focus'], 'word'),
+                    box=wr['box'], key=('lyric-touch', sh, w['line']), value=-wr['cross'])
             if wr['i'] not in sung_at.get(t, ()):
                 # a later look at a word sung earlier in this shot: only "drawn but covered" counts (a line may leave)
                 if r['solo'] and wr['status'] == 'ok' and wr['vis'] < 0.5 and wr['off'] < 0.15:
@@ -220,6 +245,21 @@ def run(pg, info, a, cfg, out_dir):
                 type_y.append(((box[1] + box[3]) / 2) / H)
         # --- lyrics as a whole: a line carried into a shot after it was sung; two lyrics drawn on top of each other
         lyr = [x for x in r['texts'] if x['lyric'] and x['alpha'] >= 0.05]
+        if not r['solo'] and 0 <= top < len(shots):
+            # a transition: the outgoing shot must not draw the incoming shot's line (a line that starts after the cut)
+            F = shots[top]['from']
+            for tx in lyr:
+                ls = tx.get('lines') or []
+                if tx['entry'] == top or tx['entry'] not in r['shots'] or not ls or len(_norm(tx['s'])) < 3:
+                    continue
+                if all(line_span[l][0] >= F - 1e-3 for l in ls if l in line_span):
+                    l = min(ls)
+                    text = ' '.join(line_words[l])
+                    add('lyric-handover', t, shot_name(tx['entry']), f"\"{tx['s'][:40]}\": during the transition into {shot_name(top)} "
+                        f"(from {F:.2f} s) the outgoing shot still draws the incoming shot's line (\"{text[:48]}\", starts at "
+                        f"{line_span[l][0]:.2f} s) in its own layout, so it shows twice. Let the next shot have it: take the line from "
+                        f"f.lyrics.lineAt(f.t, f.from) — it leaves out lines that start after f.until, where the next shot takes over",
+                        box=tx['box'], key=('lyric-handover', tx['entry'], l), value=t - F)
         if r['solo'] and 0 <= top < len(shots):
             F = shots[top]['from']
             for tx in lyr:
@@ -231,9 +271,10 @@ def run(pg, info, a, cfg, out_dir):
                     text = ' '.join(line_words[l])
                     add('lyric-carryover', t, sh, f"\"{tx['s'][:40]}\": its line (\"{text[:48]}\") was all sung before this shot began "
                         f"(last word at {line_last[l]:.2f} s, cut at {F:.2f} s) and is drawn again here. Carry a line across a cut only "
-                        f"while it still has words to sing; otherwise show nothing until this shot's own line starts",
+                        f"while it still has words to sing; otherwise show nothing until this shot's own line starts. (If this text is "
+                        f"part of the picture — a song word on a prop, in a pattern — draw it inside MV.decor(() => …): then it is no lyric)",
                         box=tx['box'], key=('lyric-carryover', sh, l), value=t - F)
-            ov = lyr + [x for x in r['texts'] if not x['lyric'] and x['alpha'] >= 0.05 and short_lyric(x['s'], t)]
+            ov = lyr + [x for x in r['texts'] if not x['lyric'] and not x.get('decor') and x['alpha'] >= 0.05 and short_lyric(x['s'], t)]
             for i in range(len(ov)):
                 for j in range(i + 1, len(ov)):
                     a_, b_ = ov[i], ov[j]
@@ -254,25 +295,47 @@ def run(pg, info, a, cfg, out_dir):
                     if (nb in na and inter >= 0.8 * ab) or (na in nb and inter >= 0.8 * aa):
                         continue                       # a sung word drawn over its own line (karaoke: ghost line + ink words)
                     add('lyric-overlap', t, sh, f"\"{a_['s'][:30]}\" and \"{b_['s'][:30]}\" are drawn on top of each other "
-                        f"({round(100 * inter / small)} % of the smaller one)", box=_union([a_['box'], b_['box']]),
+                        f"({round(100 * inter / small)} % of the smaller one). If one of them is part of the picture (a song word on a prop, "
+                        f"in a pattern), draw it inside MV.decor(() => …): then it is no lyric", box=_union([a_['box'], b_['box']]),
                         key=('lyric-overlap', sh), value=-inter / small)
+        # --- how much of the picture the lyrics (and the bars / plates behind them) hide
+        cv = r.get('cover')
+        if r['solo'] and cv and cv['edges'] >= 200:
+            main_f = {}
+            for f in r['focus']:
+                main_f[f['entry']] = f['name']
+            subj = [u['name'] for u in cv['under'] if main_f.get(u['entry']) == u['name']]
+            dens = cv.get('dens') or 0
+            if (cv['hidden'] >= cover_max and dens >= 1.5) or cv['hidden'] >= 0.25 or (subj and cv['hidden'] >= 0.03):
+                what = (f"{round(cv['hidden'] * 100)} % of the picture's detail with {round(cv['area'] * 100)} % of the frame"
+                        + (f" — placed where the picture is {dens:.1f}× as busy as average" if dens >= 1.2 else ''))
+                add('lyric-cover', t, sh, f"the lyrics and what is drawn behind them (a bar, a plate) hide {what}"
+                    + (f", including the subject \"{subj[0]}\"" if subj else '') +
+                    ": move them to where the picture is empty, drop the bar, or make the bar smaller than the line",
+                    key=('lyric-cover', top), value=-cv['hidden'])
         # --- a text drawn onto something of its own colour: a black stamp over a black drawing. (The sung words measured
         # above are judged by lyric-touch, from the picture without lyrics; here: every other text, read from the frame.)
         if r['solo']:
             measured = [wr['box'] for wr in r['words'] if wr.get('status') == 'ok']
             for tx in r['texts']:
-                if (tx.get('touch') or 0) < touch_text:
+                same, cross = tx.get('touch') or 0, tx.get('cross') or 0
+                if same < touch_text and cross < cross_text:
                     continue
                 if tx['lyric'] and any(_overlap(tx['box'], mb) > 0 for mb in measured):
                     continue
                 if any(o is not tx and _norm(o['s']) == _norm(tx['s']) and _overlap(o['box'], tx['box']) > 0 for o in r['texts']):
                     continue                           # drawn twice on purpose (a glow, a shadow, an outline): the ring is itself
-                if True:
-                    sh_t = shot_name(tx['entry'])
-                    add('text-touch', t, sh_t, f"\"{tx['s'][:40]}\" is drawn onto something of its own colour: {round(tx['touch'] * 100)} % of the thin "
+                sh_t = shot_name(tx['entry'])
+                if same >= touch_text:
+                    add('text-touch', t, sh_t, f"\"{tx['s'][:40]}\" is drawn onto something of its own colour: {round(same * 100)} % of the thin "
                         f"ring around its letters is that colour (a black stamp over a black drawing, a title on a rule): the two merge. "
-                        f"Change one colour, give the text a plate, or move it clear", box=tx['box'],
-                        key=('text-touch', sh_t, _textkey(tx['s'])), value=-tx['touch'])
+                        f"Change one colour, give the text a plate, or move it clear" + _where((tx.get('geo') or {}).get('sameGeo'), r['focus'], 'text'), box=tx['box'],
+                        key=('text-touch', sh_t, _textkey(tx['s'])), value=-same)
+                else:
+                    add('text-touch', t, sh_t, f"\"{tx['s'][:40]}\" has drawing running into it: lines or shapes touch {cross:.1f} em of its letters' "
+                        f"outline (a line through a label, a paperclip on a number, a hand over a stamp): it reads as struck through. Move "
+                        f"it into clear space, give it a plate, or stop the drawing short of it" + _where((tx.get('geo') or {}).get('crossGeo'), r['focus'], 'text'), box=tx['box'],
+                        key=('text-touch', sh_t, _textkey(tx['s'])), value=-cross)
         # --- text the camera clipped: it fits in the scene's own frame, but the push / insert / shake carried a little of
         # it over the edge. Just clipped (5–50 % cut off) reads as a mistake; mostly gone reads as a close-up.
         settled = None                                 # is the camera holding still here? (a crop while it moves is passing)
@@ -474,7 +537,7 @@ def run(pg, info, a, cfg, out_dir):
     max_crops = int(qc.get('crops', 60))
     from PIL import Image, ImageDraw
     for k, g in enumerate(items):
-        if k >= max_crops or (g['box'] is None and g['kind'] not in ('static', 'lyric-missing')):
+        if k >= max_crops or (g['box'] is None and g['kind'] not in ('static', 'lyric-missing', 'lyric-cover')):
             continue
         png = pg.frame(g['t'], 1, ('image/png', 1), {})
         im = Image.open(io.BytesIO(png)).convert('RGB')
@@ -520,6 +583,37 @@ def run(pg, info, a, cfg, out_dir):
         print(f"  {'ERROR' if g['sev'] == 'error' else 'warn '} {g['kind']:<13} {when:<12} {g['shot']:<14} {g['msg']}" + (f"\n{'':>22}→ {g['crop']}" if g.get('crop') else ''))
     print(f"\n{len(errs)} errors, {len(warns)} warnings · {checked} words measured · report: {qdir / 'report.md'}")
     return 1 if errs else 0
+
+
+_SIDE = {'above': 'above the letters', 'below': 'below the letters (along the baseline)', 'left': 'at its left end',
+         'right': 'at its right end', 'through': 'in between / through the letters'}
+
+
+def _where(geo, focus, what):
+    """the contact of a touch finding in words: which side, how far along, what colour, where, what subject is near"""
+    if not geo:
+        return ''
+    z = sorted(((v, k) for k, v in (geo.get('zones') or {}).items() if v >= 0.1), reverse=True)
+    sides = ', '.join(f"{_SIDE[k]} {round(v * 100)} %" for v, k in z) or 'all round'
+    hs, vs, b = geo.get('hspan', 0), geo.get('vspan', 0), geo.get('box') or [0, 0, 0, 0]
+    top = z[0][1] if z else ''
+    if top in ('above', 'below') and hs >= 0.6:
+        shape = f"a horizontal edge or line running {'over' if top == 'above' else 'under'} the {what}"
+    elif top == 'through' and vs >= 0.6:
+        shape = f"a line or shape crossing the {what}"
+    elif top in ('left', 'right') and vs >= 0.5:
+        shape = f"something upright butting into its {top} end"
+    elif hs < 0.25 and vs < 0.5:
+        shape = 'a small shape at one spot'
+    else:
+        shape = 'drawing spread along it'
+    near = ''
+    cx, cy = (b[0] + b[2]) / 2, (b[1] + b[3]) / 2
+    best = min(((math.dist((cx, cy), (f['x'], f['y'])), f['name']) for f in focus or [] if f.get('name')), default=None)
+    if best and best[0] < 240:
+        near = f"; nearest MV.focus \"{best[1]}\" {round(best[0])} px away"
+    return (f". Where: {shape} — {sides}; spans {round(hs * 100)} % of its width, {round(vs * 100)} % of its height; "
+            f"colour {geo.get('color', '?')}; contact at x {b[0]}–{b[2]}, y {b[1]}–{b[3]}{near}")
 
 
 def _inv(m):

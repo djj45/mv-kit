@@ -29,10 +29,17 @@ class Lyrics {
    * the line this SHOT should show — a line that was all sung before the cut is not carried into the shot (it would
    * flash up restyled for the first frames: qa's lyric-carryover); a line still being sung across the cut (it has a
    * word starting at or after `from`) is. So in a scene: f.lyrics.lineAt(f.t, f.from).
+   * `until`: a line that starts at or after it belongs to the next shot (null here). f.lyrics fills it in with the
+   * moment the next shot takes over (f.until), so during a dissolve / zoom / reflow the outgoing shot does not draw
+   * the incoming shot's line in its own layout (qa's lyric-handover).
    */
-  lineAt(t, from) {
+  lineAt(t, from, until) {
     let cur = null;
     for (const l of this.lines) if (l.words.length && l.start <= t) cur = l;
+    if (until != null && cur && cur.start >= until - 1e-6) {           // the next shot's line: show what came before it
+      cur = null;
+      for (const l of this.lines) if (l.words.length && l.start < until - 1e-6) cur = l;
+    }
     if (!cur || t > cur.end + 0.5) return null;
     if (from != null && cur.words[cur.words.length - 1].start < from - 1e-6) return null;
     return cur;

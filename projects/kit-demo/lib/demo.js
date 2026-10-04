@@ -32,5 +32,9 @@ const D = {
   },
   paperBg(g) { g.fillStyle = D.paper; g.fillRect(0, 0, W, H); },
 };
+// the lyric helper is one MV.lyric: anything it draws (here only the words; a bar or plate behind them too) counts as
+// the lyric when `render.py qa` measures how much of the picture the lyrics hide (lyric-cover)
+const lineDraw = D.line;
+D.line = (g, f, o) => MV.lyric(() => lineDraw.call(D, g, f, o));
 G.D = D;
 })(window);

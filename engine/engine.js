@@ -89,6 +89,13 @@ MV.setup = async function () {
   if (!timelineFn) throw new Error('No MV.timeline(...) defined (timeline.js)');
   MV.entries = timelineFn(helpers).filter(e => e && e.to > e.from).sort((a, b) => a.from - b.from)
     .map((e, i) => ({ params: {}, ...e, i, name: e.name || e.scene }));
+  // where each entry hands over: the start of the later entry that takes over from it (starts inside it and runs on
+  // past its end — the next shot of a dissolve, a zoom, a reflow). A line that starts after that belongs to the next
+  // shot: f.lyrics.lineAt leaves it out of this one, so it does not show twice while the two overlap.
+  for (const e of MV.entries) {
+    const nx = MV.entries.filter(o => o.from > e.from + 1e-6 && o.from < e.to - 1e-6 && o.to >= e.to - 1e-6);
+    e.until = nx.length ? Math.min(...nx.map(o => o.from)) : e.to;
+  }
   for (const e of MV.entries) if (!MV.scenes[e.scene]) throw new Error(`timeline: unknown scene "${e.scene}" — add "${e.scene}" to "scenes" in project.js`);
   for (const [name, def] of Object.entries(MV.scenes)) if (def.init && MV.entries.some(e => e.scene === name)) await def.init.call(def, MV);
 };
@@ -189,15 +196,28 @@ MV.anchorOf = function (e, spec, t) {
 function frameFor(e, t) {
   const A = MV.audio, beat = A.beatAt(t), bar = A.barAt(t);
   return {
-    t, lt: t - e.from, p: clamp((t - e.from) / (e.to - e.from)), from: e.from, to: e.to, dur: e.to - e.from,
+    t, lt: t - e.from, p: clamp((t - e.from) / (e.to - e.from)), from: e.from, to: e.to, until: e.until ?? e.to, dur: e.to - e.from,
     params: e.params, entry: e, W, H, fps: MV.project.fps,
     tick: tick(t), tq: onTwos(t),
     beat, beatPhase: beat - Math.floor(beat), bar, barPhase: bar - Math.floor(bar), section: A.section(t),
     a: { rms: A.env('rms', t), low: A.env('low', t), mid: A.env('mid', t), high: A.env('high', t),
          vocals: A.env('vocals', t), drums: A.env('drums', t),
          kick: A.hit('kick', t, 0.12), snare: A.hit('snare', t, 0.14), hat: A.hit('hat', t, 0.05), onset: A.hit('onset', t, 0.1) },
-    lyrics: MV.lyrics, audio: A,
+    lyrics: shotLyrics(e), audio: A,
   };
+}
+/** MV.lyrics as one entry sees it: lineAt(t, from) also leaves out the lines that start after the entry hands over */
+const SHOT_LYRICS = new WeakMap();
+function shotLyrics(e) {
+  const L = MV.lyrics;
+  if (!L) return L;
+  let v = SHOT_LYRICS.get(e);
+  if (!v || Object.getPrototypeOf(v) !== L) {
+    v = Object.create(L);
+    v.lineAt = (t, from, until) => L.lineAt(t, from, until === undefined ? (e.until ?? e.to) : until);
+    SHOT_LYRICS.set(e, v);
+  }
+  return v;
 }
 MV.frameFor = frameFor;
 
@@ -316,7 +336,7 @@ function applyPost(o, src, t, post, ovs) {
     o.fillStyle = '#000'; o.fillRect(0, 0, W, H);
     o.save(); o.translate(W / 2 + sx + px, H / 2 + sy + py); o.rotate(q.rot); o.scale(z, z); o.translate(-W / 2, -H / 2); o.drawImage(src, 0, 0); o.restore();
   } else { MV.lastPost = { sx: 0, sy: 0, z: 1, rot: 0, remapped: !!q.remapped }; o.drawImage(src, 0, 0); }
-  if (ovs && ovs.length) drawOverlays(o, ovs);
+  if (ovs && ovs.length && !MV.noOverlay) drawOverlays(o, ovs);   // MV.noOverlay: engine/qa.js looks at the picture without it
   if (q.invert) { o.globalCompositeOperation = 'difference'; o.fillStyle = '#fff'; o.fillRect(0, 0, W, H); o.globalCompositeOperation = 'source-over'; }
   if (q.grain > 0) {
     o.save(); o.globalCompositeOperation = 'overlay'; o.globalAlpha = q.grain;
