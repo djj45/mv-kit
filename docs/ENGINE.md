@@ -41,9 +41,34 @@ MV.scene('wide', {
 
 ### 后期参数（render 的返回值）
 
-`shake`（像素，或 `[x, y]`）、`zoom`、`rot`、`flash`（0..1 白闪）、`flashColor`、`fade`（0..1 压黑）、`invert`、`grain`、`vignette`、`vignetteColor`。默认值来自 `project.post`。
+`shake`（像素，或 `[x, y]`）、`zoom`、`rot`、`pan`（`[x, y]` 像素：镜头平移，和 `shake` 不同，不会额外放大补边；`kits/camera.js` 用它把推近钉在某一点上）、`flash`（0..1 白闪）、`flashColor`、`fade`（0..1 压黑）、`invert`、`grain`、`vignette`、`vignetteColor`。默认值来自 `project.post`。
 
 后期滤镜：`MV.postFilter(fn)` 注册一个对整帧生效的滤镜，`fn(canvas, post, t)` 在运动模糊之后、shake / zoom / 颗粒 / 暗角之前运行，可以原地重画这张画布；`post` 是合并后的后期参数，滤镜从里面读自己的设置。例：pigment.js 的整帧颜料层读 `post.pigment`（见下）。
+
+### 屏幕层：MV.overlay
+
+`MV.overlay(o => { … })` 在场景的 `render()` 里调用：函数里画的东西**画在镜头之后**——push / insert / warp、shake、zoom、rot、pan 都动不到它——再盖颗粒、暗角、闪白、压黑。`o` 是输出画面的 W×H 画布（像素就是成片像素，状态已重置）；函数在同一帧稍后执行，可以直接用 render 的 `f`。
+
+注意屏幕层底下的世界是会动的：推近时物体会被推到字底下，同色就看不见了（qa 在镜头的几个时刻回头看已经唱过的词，报 `lyric-covered`）。屏幕层的字要么垫一条底（纸带、色块），要么让推近的主体离开歌词区。
+
+用它放**镜头动、它不动**的东西：歌词区、字幕式的说明、HUD。歌词放在屏幕层后，`MV.keep` 就不需要了（在屏幕层里调用会被忽略），镜头想推多近推多近，`insert` 不再被歌词的 keep 框钳住。交叉淡化 / 转场时屏幕层跟着自己的条目一起淡（新镜头 k，旧镜头 1 − k）。屏幕层里也能用 `MV.focus / MV.box / MV.group`（输出像素坐标），qa 照常检查——包括 warp 那几帧：场景画布被重新映射、量不了，屏幕层的字照量。
+
+```js
+render(g, f) {
+  drawWorld(g, f);                                  // 跟着镜头动
+  MV.overlay(o => WD.line(o, f, { zone: 'low' }));  // 不跟着动：歌词钉在下区
+}
+```
+
+### 给镜头和 qa 的声明：MV.focus / MV.keep / MV.box / MV.group
+
+场景在 `render()` 里顺手报这几样东西，`kits/camera.js` 用它们运镜，`render.py qa` 用它们检查。都很便宜，不开 qa 时几乎不花时间。
+
+- `MV.focus(x, y, name)`：这一帧**眼睛该看的东西**在哪（场景画布坐标）：笔尖、火头、正在长的那一端、角色的脸。每帧都报。一帧里可以报好几个，**最后报的那个是主体**：camera 的 `insert` 跟着它推近，qa 检查它从不跑出画面（`focus-out`）；之前报的（lib 顺手报的每个角色）推近时出画不算错。所以主体放在最后报。
+- `MV.keep(g, x, y, w, h)`：**不许被镜头推出画面**的矩形（一句歌词、一个标题），按 g 当前的坐标。camera 推近时宁可少推，也不把它推到离边 96 px 以内。`BOX.text(…, { keep: true })` 会自己报。代价是：画面上有 keep 框时 `insert` 只能轻推；要真正推进局部，把歌词画进屏幕层（`MV.overlay`，见上），就不用 keep 了。
+- `MV.box(g, x, y, w, h, { name, pad, owner })`：**字要装在里面**的框：表格的格子、标题栏的一行、标签牌、终端面板。
+- `MV.group(tag, fn)`：fn 里画的框和字算**同一个主人**。框和"它自己的字"要在同一个 group 里画（或者先 `const id = MV.owner('table')`，框传 `{ owner: id }`，字在 `MV.within(id, () => g.fillText(…))` 里画）。qa 对**自己的字**从严：必须在框里、四边留够余量，跨出去是错误（`box-cross` / `box-tight`）；**别人的字**碰到这个框只算撞车（`box-clash`，警告）：被框线切过、或者压在框里自己的字上。完全落在别人框里、底下也没压着字的，不报——qa 不知道它是不是本该在那儿；想让它被严查，就画进那个框的 group。
+  `kits/layout.js` 的 `BOX.table / BOX.cell / BOX.panel / BOX.lines` 已经自己分好主人；自己写的框助手（标题栏、规格表）在函数外面包一层 `MV.group`。
 
 ## 时间线（timeline.js）
 
@@ -56,14 +81,14 @@ MV.timeline(({ lyrics, audio, cut, after, start, T0, T1 }) => [
 ]);
 ```
 
-- `cut(q, nth)`：第 nth 个包含 q 的歌词行，其第一个词开始之前的那一拍。
+- `cut(q, nth, { hold })`：第 nth 个包含 q 的歌词行，其第一个词开始之前的那一拍。`hold`（秒，默认 `project.cutHold`，没写就是 0）：上一句的最后一个字在旧镜头里至少要停这么久；那一拍离它太近时，切点改落在这一句的第一个词上（仍在歌上，不会切进下一句）。新项目的 `project.js` 默认 `"cutHold": 0.2`（30 fps 下 6 帧）。
 - `after(q, nth)`：这一行结束处最近的小节头。
 - `start(q, nth)`：这一行第一个词开始的时间。
 - `land(t, dur, pre = 0.7)`：一个 `dur` 秒的转场要"落"在 t 上时它的 `from`：七成动作在 t 之前，余下的在 t 之后收住（`from: land(cut('…'), 0.8), fadeIn: 0.8`）。
 - 条目首尾相接就是硬切；只有写了 `fadeIn` 且重叠时才交叉淡化。前一个条目要一直延续到 `from + fadeIn`，否则它一结束，淡化到一半的画面会跳成新镜头。
 - 转场：条目写 `fadeIn: 秒数, wipe: '名字'`，新镜头就按这个转场进来（代替交叉淡化），见下面的"转场"。
 - 同一个场景可以出现多次，用 `params` 区分。
-- `MV.lint()` 检查剪辑里单看一帧发现不了的问题，返回 `[{t, kind, msg}]`：`gap`（空档）、`hidden`（重叠但没有 `fadeIn`）、`fade`（淡化放不完或没有重叠）、`wipe`（未定义的转场、没写 `fadeIn` 的转场、转场自己的检查没通过，比如场景里没有那个锚点）、`repeat`（同场景同参数连着出现）、`offbeat`（切点不在拍上也不在唱到的字上，±1 帧；转场的开始、结束或 `land` 的落点在拍上也算；没有 audio.js 时不查）、`linetail`（句尾的字离下一句不到 `lineTail` 秒，默认 0.65）。`render.py check` 打印它们，预览在镜头条上画红色短线。`project.lint = { lineTail, off: ['offbeat', …] }` 调整。
+- `MV.lint()` 检查剪辑里单看一帧发现不了的问题，返回 `[{t, kind, msg}]`：`gap`（空档）、`hidden`（重叠但没有 `fadeIn`）、`fade`（淡化放不完或没有重叠）、`wipe`（未定义的转场、没写 `fadeIn` 的转场、转场自己的检查没通过，比如场景里没有那个锚点）、`repeat`（同场景同参数连着出现）、`offbeat`（切点不在拍上也不在唱到的字上，±1 帧；转场的开始、结束或 `land` 的落点在拍上也算；没有 audio.js 时不查）、`linetail`（句尾的字离下一句不到 `lineTail` 秒，默认 0.65）、`cuttail`（硬切离一句最后一个字的开始不到 `cutTail` 秒，默认 6 帧：那个字闪一下就没了；用 `cut(q, n, { hold })` 或 `project.cutHold`）。`render.py check` 打印它们，预览在镜头条上画红色短线。`project.lint = { lineTail, cutTail, off: ['offbeat', …] }` 调整。
 
 ### 转场
 
@@ -100,6 +125,7 @@ MV.timeline(({ lyrics, audio, cut, after, start, T0, T1 }) => [
 
 - `lyrics.get('sudden drop', nth)` → 行 `{text, start, end, words: [{w, start, end, conf, syl?, join?}]}`。按内容找，别写死时间。
 - `lyrics.findWords('P(doom)')`、`lyrics.lineAt(t)`、`lyrics.wordAt(t)`
+- `lyrics.lineAt(f.t, f.from)`：**这个镜头**该显示的那一句。切点之前已经唱完的句子不带进来（否则它会换上新镜头的样式在开头闪几帧，qa 报 `lyric-carryover`）；切在一句中间、切点之后还有词要唱的，照常带进来。场景里取"当前句"一律这样写，自己写的取句函数也照这条规则。
 - `MV.Lyrics.wordProgress(word, t)` → 0..1
 - `lyrics.tokens(line)` → 给 `karaoke()` 用的 `[{text, start, end, join}]`（中日文逐字，`join` 表示后面不加空格）
 
@@ -122,6 +148,29 @@ MV.timeline(({ lyrics, audio, cut, after, start, T0, T1 }) => [
 ## 风格包（kits/）
 
 风格包就是一个全局函数集合，供多个项目复用同一种画风。项目在 `project.kits` 里列出名字即可加载 `kits/<名字>.js`。
+
+**camera.js 和 layout.js 每个项目都该带**（`tools/new_project.py` 默认加上）。它们来自 `projects/pdoom-bolt`：那一支片子交出去以后，用户一条条追加的修改意见几乎都落在这两件事上——镜头不动、字出框。示例：`projects/kit-demo`（三个短镜头，每种用法一处）。
+
+**camera.js**（镜头语言，全片一处说了算；场景一行不用改）：
+- **缓推**（默认开）：没有真正静止的镜头。每个时间线条目在自己的时长里慢慢推近 2.6–5.2 %（按时长），外加几像素漂移。条目上写 `push: 0` 关掉（要写理由）、`push: 0.08` 推得更狠；`project.camera.push: false` 全片关掉。和邻居有交叉淡化 / 转场的条目不推（淡化结束时会跳）。
+- **局部放大 + 跟随**：条目上写 `insert: { at, dur, amt, x, y, ease }`。不写 x / y 时焦点是场景这一帧的 `MV.focus`：被跟的东西待在它自己的位置上不跑，周围往外扫。
+- **二维转三维**：条目上写 `warp: { at, dur, from, to, pitch, dist, bg }`，整帧像一块板子在透视里转过去（from / to 是偏转角，弧度：0 = 正对，0.6 ≈ 34°）。适合语域切换：纸上的图立起来转走。场景自己的图层也能用 `CAM.warpPlane(g, canvas, o)`。
+- **主体不出画**：`CAM.keep(points, { anchor, safe, min })` 返回一个 ≤ 1 的缩放：以 anchor 为不动点把整个世界缩这么多，points 就都在安全区里。缩放跟着点走，点掉得快就缩得快，永远看得见：
+  ```js
+  const s = CAM.keep([tip], { anchor: [AX, AY] });
+  g.save(); g.translate(AX, AY); g.scale(s, s); g.translate(-AX, -AY); /* 画世界 */ g.restore();
+  MV.focus(AX + (tip[0] - AX) * s, AY + (tip[1] - AY) * s, 'pen tip');
+  ```
+- 所有推近都受 `MV.keep` 的框限制（离边至少 `project.qa.margin`，默认 96 px）。歌词留在场景画布上又报了 keep，`insert` 就只能推几个百分点；要推得狠（钻进一个局部、冲进瞳孔），把歌词画进屏幕层 `MV.overlay`：世界在推，字钉在原地，keep 不再需要。
+
+**layout.js**（放进框里的字；不要再手写 x / y）：
+- `BOX.font(g, size, { font, weight, track })`：font 可以是 CSS 字体名，也可以是项目自己的设置函数（如 `LK.mono`）。
+- `BOX.fit(g, text, size, maxW, o)`：不超过 maxW 的最大字号（只缩不放）。
+- `BOX.text(g, text, x, y, { size, maxW, align, base, color, alpha, keep })`：一行字；`keep: true` 顺手 `MV.keep`。
+- `BOX.center(g, text, cx, cy, { size, font, color })`：短字（圆里的序号、方块里的字母）按**真实墨迹**居中在一点上。`textAlign 'center'` + `textBaseline 'middle'` 居中的是字框不是字形：数字会偏上或偏下，带字距的等宽字还会往左偏。
+- `BOX.table(g, x, y, cols, rows, { cw, rh, color, lw })`：画表格并登记每个格子，返回 `T`；`BOX.cell(g, T, col, row, text, { size, font, align, pad, at, color })`：按真实墨迹在行里垂直居中、留边、超宽自动缩字；一行放两行字时用 `at`（0..1，墨迹中心在行高的位置）。
+- `BOX.panel(g, x, y, w, h, { fill, stroke, lw, pad, name })` + `BOX.lines(g, P, lines, { size, gap, font })`：面板和面板里一叠字，字号缩到四边都留够 `pad`。
+
 
 **anime.js**（日本 TV 动画赛璐璐风）：`paintCumulus`（硬边分色积云）、`drawLit`（角色单独成层 + 轮廓光）、`focusLines`（集中线）、`upLines`（速度线）、`sfx`（片假名音效字）、`titleText / lyricRow / bigWord / jpSub`（动画片头风格的歌词字和字幕）、常量 `FONT MONO INK`。配合 `drawRate: 12` 和 `post.grain ≈ 0.09`。
 
@@ -218,6 +267,33 @@ render(g, f) {
 示例：`projects/pdoom-print`（P(doom) 全曲，46 个镜头；`lib/pp.js` 有逐词打字的歌词、页眉、人形、眼睛和一个 z-buffer 的 3D 曲面光栅化）。
 
 写新风格包的建议：只放"这种画风在任何歌里都用得上"的东西（笔触、质感、特效、文字风格）；角色、道具、具体场景放在项目的 `lib/` 里。
+
+## qa（`render.py qa`）
+
+`check` 只看报错和时间线；`qa` 量**观众看到的东西**，全部用真实渲染的帧算，不靠看图：
+
+| 类别 | 级别 | 量的是什么 |
+|---|---|---|
+| `lyric-hidden` | 错误 | 一个词在唱到的那一刻，自己的字形只有不到一半真的显示在画面上：被后画的东西盖住、被遮罩裁掉、被镜头推出画面、或者和背后同色。（做法：同一帧带歌词渲一次、不带歌词渲一次，只在这个词自己的字形像素里比两张图。） |
+| `lyric-faint` | 警告 | 同上，显示了一半到 `qa.vis`（默认 0.8） |
+| `lyric-missing` | 警告 | 唱到的词根本没有作为文字画出来（先画进离屏图层再贴上的，如点阵字，算"无法测量"，只计数不报） |
+| `lyric-edge` | 警告 | 唱到的词离画面边缘不到 `qa.margin`（96 px） |
+| `lyric-covered` | 警告 | 这一镜早先唱过、还画着的词，后来被盖住了（显示不到一半）：有东西移到它上面，或者推近把画面推到了屏幕层歌词底下。qa 在每镜第一帧和 15 / 50 / 85 % 处回头看 |
+| `lyric-touch` | 警告 | 唱到的词贴上了**和它同色**的东西：字母外面一圈（0.06 em 宽）里超过 7 % 是字自己的颜色（在不带歌词的那张图里量）——一条线从字中间穿过、字母站在坐标轴或框线上、推近把门框推到屏幕层的字底下。看着像删除线或粘在线上。`qa.touch` 调阈值 |
+| `text-touch` | 警告 | 同一件事，量的是其他字（24 px 以上：印章、标题、大数字、当装饰用的歌词词）：从成片里量，颜色取它画的时候的 fillStyle。黑色印章压在黑色图上、刻度数字被指针或条纹吞掉。`qa.touchText`（默认 20 %）。禁令牌的斜杠压在符号上这种本来就要叠的，保留并在 TREATMENT 写理由 |
+| `lyric-carryover` | 警告 | 新镜头把**切点之前已经唱完的那一句**又画了一遍（换了新镜头的样式和位置）：上一镜的最后一句在下一镜开头闪一下。一句只有在切点之后还有词要唱时才跨镜头；唱完了，新镜头就先空着，等自己那一句开始。qa 在每个镜头的第一帧都看一次 |
+| `lyric-overlap` | 警告 | 两段歌词文字叠在一起（重叠超过小的那段的 20 %，而且中心错开——描边、投影那种原地重画不算）：通常是两句、或同一句画了两次挤在同一个位置 |
+| `box-cross` | 错误 | 框**自己的字**（同一个 `MV.group`）跨出了框，或者不在这组的任何一个框里（掉出了表格） |
+| `box-tight` | 警告 | 框自己的字在框里，但某一边的余量不到墨迹高度的 40 %（至少 3 px；`MV.box` 的 `pad` 可改） |
+| `box-clash` | 警告 | **别人的字**和框撞车：被框线切过，或者压在框里自己的字上（引线的落款压到标题栏、手写坐标的数值跨过表格线、歌词压在标牌的边框上）。歌词也算：本该印在牌子上的歌词，画进牌子的 `MV.within(owner)`，就按"自己的字"从严查 |
+| `text-cut` | 警告 | 一段字（标签、表格里的值、还挂着的歌词）在场景里离边 ≥ 96 px，被镜头的推近 / insert / shake 带出画面边一点点（切掉 5–50 %），而且镜头停在那儿：看着像出错。要么留整（`MV.keep`、往里挪），要么推到它整个出画。镜头还在动时的裁切、场景自己贴边放的字（图框的分区号）不报 |
+| `focus-out` | 错误 | `MV.focus` 报的主体跑出了画面（或离边不到 3 %） |
+| `static` | 警告 | 一个镜头（去掉歌词）从头到尾几乎不变，或有一半以上时间（≥ 1.5 s）定住不动 |
+| `type-flat` / `type-band` | 警告 | 全片歌词字号差不多大（最大 / 最小 < 2.5 倍）；七成以上歌词挤在同一条横带里（像字幕）。只在整片跑 qa 时判；`--from / --to` 只打印这一段的数字 |
+
+输出：终端摘要、`out/qa/report.md`（含每个镜头的运动量表）、`out/qa/qa.json`，以及每条问题一张**局部放大的截图**（红框是字或主体，黄框是它该在的框）。有错误时退出码为 1。`--from / --to` 只查一段，改一个镜头时用它。`project.qa = { "margin": 96, "vis": 0.8, "motion": 0.02, "freeze": 0.005, "typeRange": 2.5, "off": ["lyric-edge"] }` 调阈值或关掉某一类。
+
+做完的标准是 **qa 没有错误**，警告逐条处理或在 TREATMENT 里写下为什么保留。拼板（`sheet --cuts`）还是要看，但它看不出几个像素的出框、看不出被裁掉一半的字——那些交给 qa。
 
 ## 性能
 
