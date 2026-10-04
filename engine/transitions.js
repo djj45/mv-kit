@@ -101,6 +101,9 @@ MV.wipe('zoom', {
     const s = Math.sqrt(Math.max(1, rb[2] * rb[3]) / Math.max(1, ra[2] * ra[3]));   // how much the object grows
     const sa = Math.pow(s, u), sb = sa / s, c = [lerp(ca[0], cb[0], u), lerp(ca[1], cb[1], u)];   // a constant zoom rate
     const ow = (ra[2] * sa + rb[2] * sb) / 2, oh = (ra[3] * sa + rb[3] * sb) / 2, obj = [c[0] - ow / 2, c[1] - oh / 2, ow, oh];
+    // a picture moved off its place leaves part of the frame bare: fill it with that picture's own border colour
+    g.save(); g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 1; g.globalCompositeOperation = 'source-over';
+    g.fillStyle = edgeColor(s >= 1 ? A : B); g.fillRect(0, 0, W, H); g.restore();
     if (s >= 1) {   // push in: the old shot grows around the object; the new one shows through it, then everywhere
       place(g, A, sa, c, ca);
       const ob = smoothstep(0.6, 1, u);
@@ -123,8 +126,15 @@ MV.wipe('zoom', {
     const p = e.params || {}, m = p.match, out = [];
     if (p.shape && !['rect', 'round'].includes(p.shape)) out.push(`shape "${p.shape}": rect or round`);
     if (!m) return out.concat('no params.match: [a, b] (rects or anchor names); with neither it only dissolves');
+    const r = [];
     for (const [en, spec, t] of [[prev, m[0], Math.max(prev.from, e.from)], [e, m[1], e.from]]) {
-      try { MV.anchorOf(en, spec, t); } catch (err) { out.push(err.message); }
+      try { r.push(MV.anchorOf(en, spec, t)); } catch (err) { out.push(err.message); }
+    }
+    if (r.length === 2) {
+      const s = Math.sqrt(Math.max(1, r[1][2] * r[1][3]) / Math.max(1, r[0][2] * r[0][3]));
+      if (s > 1 / 1.6 && s < 1.6) out.push(`the two anchors are about the same size (×${s.toFixed(2)}): the zoom only slides one picture `
+        + `over the other. Push into a bigger object in the new shot (a small thing → the whole of the next picture: match [a, 'full']), `
+        + `pull out of a big one, use pan for two places in one space — or cut`);
     }
     return out;
   },

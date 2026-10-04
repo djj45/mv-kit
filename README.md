@@ -52,7 +52,7 @@ open projects/my-song/index.html
 uv run tools/render.py projects/my-song check          # 每个镜头渲一帧看报错，并列出时间线 / 歌词提示（见下）
 uv run tools/render.py projects/my-song qa             # 量观众看到的问题，有错误就退出码 1，截图在 out/qa/（见下）
 uv run tools/render.py projects/my-song sheet --cuts
-uv run tools/render.py projects/my-song strip --t 40.2 --dur 1.2   # 关键动作：从 40.2 s 起每 0.2 s 一帧
+uv run tools/render.py projects/my-song strip --t 40.2 --dur 1.2   # 关键动作：从 40.2 s 起每 0.2 s 一帧 → out/strip-0040.20.png
 
 # 6. 导出
 uv run tools/render.py projects/my-song                       # 1080p，project.js 里的 fps

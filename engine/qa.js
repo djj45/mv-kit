@@ -11,6 +11,8 @@
 //                               gap in px, default 40 % of the text's ink height, at least 3 px); any other text that
 //                               lands on it is a clash. kits/layout.js registers its boxes and owns their text itself.
 //   MV.group(tag, fn)           Run fn with every box and text it draws marked as one owner (see MV.box).
+//   MV.lyric(fn)                fn draws a lyric and its bar / plate (qa leaves all of it out of the bare picture).
+//   MV.decor(fn)                fn draws song words that are part of the picture (on a prop, in a pattern): not lyrics.
 //
 // All of these also work inside MV.overlay (engine.js: the screen layer drawn after the camera): there they are in
 // output pixels, and qa maps them as they are instead of through the camera.
@@ -59,6 +61,27 @@ function currentOwner() { return GSTACK.length ? GSTACK[GSTACK.length - 1] : nul
 MV.owner = tag => `${tag || 'group'}#${++GSEQ}`;
 MV.within = (id, fn) => { GSTACK.push(id || null); try { return fn(); } finally { GSTACK.pop(); } };
 MV.group = (tag, fn) => { const id = MV.owner(tag); return MV.within(id, () => fn(id)); };
+/**
+ * MV.lyric(fn): fn draws a lyric AND what goes with it — the bar, plate or block behind the words. Runs as is; qa
+ * just knows that all of it belongs to the lyric, and leaves it out when it looks at the bare picture to measure how
+ * much the lyrics hide (lyric-cover). Wrap a project's lyric helper in it: WD.line = (g, f, o) => MV.lyric(() => …).
+ * (On the screen layer, MV.overlay already marks everything as lyric-side; MV.lyric is for the scene layer.)
+ */
+MV.lyric = fn => {
+  if (!(QA.on && QA.mode === 'bare')) return fn();
+  QA.suppress = (QA.suppress || 0) + 1;
+  try { return fn(); } finally { QA.suppress--; }
+};
+/**
+ * MV.decor(fn): the text fn draws is part of the picture, not the lyric — a word of the song lettered on a prop, woven
+ * into cloth, stamped on a crate ("P(doom)" on the loom, "AGI" on a chart). qa matches lyrics by their words, so such
+ * a text would otherwise count as a lyric drawn twice (lyric-overlap) or carried over (lyric-carryover). Texts inside
+ * are measured as ordinary texts (text-touch, text-cut, box-clash); draw them whole, never letter by letter to hide them.
+ */
+MV.decor = fn => {
+  QA.decor = (QA.decor || 0) + 1;
+  try { return fn(); } finally { QA.decor--; }
+};
 
 /** 'frame' / 'xfade' / 'xa': a scene canvas (the camera moves it); 'out': the screen layer (MV.overlay), in output px */
 function frameCanvas(c) { return c === MV.FRAME ? 'frame' : c === MV.XFADE ? 'xfade' : c === MV.XA ? 'xa' : c === MV.OVL ? 'out' : null; }
@@ -95,15 +118,20 @@ function setContext(t) {
 // ---------------------------------------------------------------- the text hook (only with ?qa=1)
 function install() {
   const P = CanvasRenderingContext2D.prototype;
+  // inside MV.lyric while qa looks at the bare picture: nothing reaches the canvas
+  for (const name of ['fillRect', 'strokeRect', 'clearRect', 'fill', 'stroke', 'drawImage', 'putImageData']) {
+    const orig = P[name];
+    P[name] = function () { if (QA.suppress > 0) return; return orig.apply(this, arguments); };
+  }
   for (const [name, kind] of [['fillText', 'fill'], ['strokeText', 'stroke']]) {
     const orig = P[name];
     P[name] = function (text) {
       if (QA.on) {
         const where = frameCanvas(this.canvas);
         if (!where && QA.mode === 'record' && String(text).trim()) QA.offscreen.push(norm(text));   // drawn into a layer first
-        if (where && String(text).trim()) {
-          const lyric = isLyric(text);
-          if (QA.mode === 'nolyric' && lyric) return;
+        if (where && String(text).trim() && Number.isFinite(+arguments[1]) && Number.isFinite(+arguments[2])) {
+          const lyric = !(QA.decor > 0) && isLyric(text);
+          if (QA.suppress > 0 || ((QA.mode === 'nolyric' || QA.mode === 'bare') && lyric)) return;
           if (QA.mode === 'record') {
             const m = this.getTransform(), str = String(text);
             // metrics from the live context: its letterSpacing getter can read '' after save() + font (Chrome),
@@ -114,7 +142,7 @@ function install() {
             QA.texts.push({ s: str, kind, x: +arguments[1], y: +arguments[2], maxW: arguments.length > 3 && arguments[3] != null ? +arguments[3] : null,
                             font: this.font, lsPx: n ? (mt.width - nat) / n : 0, align: this.textAlign, base: this.textBaseline, dir: this.direction,
                             w: mt.width, abl: mt.actualBoundingBoxLeft, abr: mt.actualBoundingBoxRight, asc: mt.actualBoundingBoxAscent, desc: mt.actualBoundingBoxDescent,
-                            m: [m.a, m.b, m.c, m.d, m.e, m.f], alpha: this.globalAlpha, lw: this.lineWidth, where, lyric, lines: lyric ? lyricLines(str) : null,
+                            m: [m.a, m.b, m.c, m.d, m.e, m.f], alpha: this.globalAlpha, lw: this.lineWidth, where, lyric, decor: QA.decor > 0, lines: lyric ? lyricLines(str) : null,
                             paint: typeof (kind === 'fill' ? this.fillStyle : this.strokeStyle) === 'string' ? (kind === 'fill' ? this.fillStyle : this.strokeStyle) : null,
                             entry: MV.curEntry ? MV.curEntry.i : -1, owner: currentOwner() });
           }
@@ -203,7 +231,7 @@ function glyphStats(tx, i0, i1, M, A, B) {
   const bx0 = Math.max(0, Math.floor(box[0])), by0 = Math.max(0, Math.floor(box[1]));
   const bx1 = Math.min(W, Math.ceil(box[2])), by1 = Math.min(H, Math.ceil(box[3]));
   g.setTransform(1, 0, 0, 1, 0, 0);
-  let inside = 0, visible = 0, touch = 0;
+  let inside = 0, visible = 0, touch = 0, cross = 0, geo = {};
   if (bx1 > bx0 && by1 > by0) {
     // read the mask with a margin around the word: the ring just outside its glyphs is where "touching" is measured
     const r = Math.max(2, Math.round(0.06 * fontPx(tx.font) * scaleOf(M)));
@@ -223,15 +251,10 @@ function glyphStats(tx, i0, i1, M, A, B) {
       const dd = Math.max(Math.abs(A[o] - B[o]), Math.abs(A[o + 1] - B[o + 1]), Math.abs(A[o + 2] - B[o + 2]));
       if (dd >= 24) { visible++; col[0] += A[o]; col[1] += A[o + 1]; col[2] += A[o + 2]; }
     }
-    if (B && visible > 20) touch = touching(B, glyph, ex0, ey0, ew, eh, r, col.map(v => v / visible));
+    if (B && visible > 20) { const tc = touching(B, glyph, ex0, ey0, ew, eh, r, col.map(v => v / visible), fontPx(tx.font) * scaleOf(M)); touch = tc.same; cross = tc.cross; geo = { sameGeo: tc.sameGeo, crossGeo: tc.crossGeo }; }
   }
-  return { ink: Math.max(ink, inside), inside, visible, box, touch };
+  return { ink: Math.max(ink, inside), inside, visible, box, touch, cross, geo };
 }
-/**
- * How much of the thin ring around a word's glyphs (r px wide) is, in the frame without lyrics, the word's own
- * colour: a line running through it (a horizon, a door's edge), letters standing on an axis, a plate's border under
- * them. The letters merge with it and read as struck through or glued on. 0..1.
- */
 /** a CSS colour as [r, g, b, a] (0..255, a 0..1), or null for gradients / patterns */
 function rgba(css) {
   if (!css) return null;
@@ -249,7 +272,7 @@ function rgba(css) {
  */
 function textTouch(tx, M, A) {
   const c = rgba(tx.paint);
-  if (!c || c[3] < 0.9 || tx.alpha < 0.9) return 0;
+  if (!c || c[3] < 0.9 || tx.alpha < 0.9) return { same: 0, cross: 0 };
   const g = maskCanvas();
   g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, W, H);
   g.setTransform(M.a, M.b, M.c, M.d, M.e, M.f);
@@ -261,42 +284,99 @@ function textTouch(tx, M, A) {
   const ex0 = Math.max(0, Math.floor(b[0]) - r - 2), ey0 = Math.max(0, Math.floor(b[1]) - r - 2);
   const ex1 = Math.min(W, Math.ceil(b[2]) + r + 2), ey1 = Math.min(H, Math.ceil(b[3]) + r + 2);
   const ew = ex1 - ex0, eh = ey1 - ey0;
-  if (ew < 4 || eh < 4) return 0;
+  if (ew < 4 || eh < 4) return { same: 0, cross: 0 };
   const d = g.getImageData(ex0, ey0, ew, eh).data, glyph = new Uint8Array(ew * eh);
   for (let k = 0; k < ew * eh; k++) if (d[k * 4 + 3] > 127) glyph[k] = 1;
-  return touching(A, glyph, ex0, ey0, ew, eh, r, c);
+  return touching(A, glyph, ex0, ey0, ew, eh, r, c, fontPx(tx.font) * scaleOf(M), 1);
 }
-function touching(B, glyph, x0, y0, w, h, r, c) {
-  // square dilation of the glyph mask by r (two separable passes)
-  const tmp = new Uint8Array(w * h), dil = new Uint8Array(w * h);
+/** square dilation of a w × h mask by r px (two separable passes) */
+function dilate(m, w, h, r) {
+  const tmp = new Uint8Array(w * h), out = new Uint8Array(w * h);
   for (let y = 0; y < h; y++) {
     let last = -1e9;
-    for (let x = 0; x < w; x++) { if (glyph[y * w + x]) last = x; if (x - last <= r) tmp[y * w + x] = 1; }
+    for (let x = 0; x < w; x++) { if (m[y * w + x]) last = x; if (x - last <= r) tmp[y * w + x] = 1; }
     last = 1e9;
-    for (let x = w - 1; x >= 0; x--) { if (glyph[y * w + x]) last = x; if (last - x <= r) tmp[y * w + x] = 1; }
+    for (let x = w - 1; x >= 0; x--) { if (m[y * w + x]) last = x; if (last - x <= r) tmp[y * w + x] = 1; }
   }
   for (let x = 0; x < w; x++) {
     let last = -1e9;
-    for (let y = 0; y < h; y++) { if (tmp[y * w + x]) last = y; if (y - last <= r) dil[y * w + x] = 1; }
+    for (let y = 0; y < h; y++) { if (tmp[y * w + x]) last = y; if (y - last <= r) out[y * w + x] = 1; }
     last = 1e9;
-    for (let y = h - 1; y >= 0; y--) { if (tmp[y * w + x]) last = y; if (last - y <= r) dil[y * w + x] = 1; }
+    for (let y = h - 1; y >= 0; y--) { if (tmp[y * w + x]) last = y; if (last - y <= r) out[y * w + x] = 1; }
   }
+  return out;
+}
+/**
+ * What touches a text: the thin ring (r px) just outside its glyphs, read from B. c = the text's colour, em = its
+ * size in output px. inner > 0 starts the ring that many px out (when B is the frame WITH the text: its own
+ * anti-aliased edge is not something touching it). { same: share of the ring in the text's own colour, cross: length
+ * of outline touched by any drawing that stands out from the ground, in em }.
+ */
+function touching(B, glyph, x0, y0, w, h, r, c, em, inner) {
+  if (inner) glyph = dilate(glyph, w, h, inner);
+  const dil = dilate(glyph, w, h, r);
   // the ring's usual colour (what the word stands on); a text too close to it in colour is not judged here
   const ringIdx = [];
-  const mean = [0, 0, 0];
+  const mean = [0, 0, 0], hist = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)];
   for (let k = 0; k < w * h; k++) {
     if (!dil[k] || glyph[k]) continue;
     const o = ((y0 + ((k / w) | 0)) * W + x0 + (k % w)) * 4;
     ringIdx.push(o); mean[0] += B[o]; mean[1] += B[o + 1]; mean[2] += B[o + 2];
+    hist[0][B[o]]++; hist[1][B[o + 1]]++; hist[2][B[o + 2]]++;
   }
-  if (!ringIdx.length) return 0;
+  if (!ringIdx.length) return { same: 0, cross: 0 };
+  const ringK = [];
+  for (let k = 0; k < w * h; k++) if (dil[k] && !glyph[k]) ringK.push(k);
   for (let i = 0; i < 3; i++) mean[i] /= ringIdx.length;
-  const contrast = Math.max(Math.abs(mean[0] - c[0]), Math.abs(mean[1] - c[1]), Math.abs(mean[2] - c[2]));
-  if (contrast < 64) return 0;
-  const tol = Math.min(48, 0.4 * contrast);
+  const dist = (o, q) => Math.max(Math.abs(B[o] - q[0]), Math.abs(B[o + 1] - q[1]), Math.abs(B[o + 2] - q[2]));
+  const con = q => Math.max(Math.abs(q[0] - c[0]), Math.abs(q[1] - c[1]), Math.abs(q[2] - c[2]));
+  // same: share of the ring in the text's own colour (it merges with what it touches)
   let same = 0;
-  for (const o of ringIdx) if (Math.max(Math.abs(B[o] - c[0]), Math.abs(B[o + 1] - c[1]), Math.abs(B[o + 2] - c[2])) < tol) same++;
-  return Math.round(same / ringIdx.length * 1000) / 1000;
+  const sameHit = [], crossHit = [];
+  const contrast = con(mean);
+  if (contrast >= 64) {
+    const tol = Math.min(48, 0.4 * contrast);
+    for (let i = 0; i < ringIdx.length; i++) if (dist(ringIdx[i], c) < tol) { same++; sameHit.push(i); }
+  }
+  // cross: drawing of ANY colour that stands out from the ground (the ring's median colour) at least half as strongly
+  // as the text does — a grey fence post, a green chart line, blue rays, dots — as a contact length in em: ring px / r
+  // is about the length of the outline it touches. A line straight through a word touches ~2 line widths per letter
+  // it passes; letters standing on a rule touch the whole word's width.
+  let cross = 0;
+  const bg = hist.map(hh => { let acc = 0; for (let v = 0; v < 256; v++) { acc += hh[v]; if (acc * 2 >= ringIdx.length) return v; } return 255; });
+  const cbg = con(bg);
+  if (cbg >= 64) {
+    const far = Math.max(56, 0.55 * cbg);
+    for (let i = 0; i < ringIdx.length; i++) if (dist(ringIdx[i], bg) >= far) { cross++; crossHit.push(i); }
+  }
+  const out = { same: Math.round(same / ringIdx.length * 1000) / 1000, cross: Math.round(cross / r / Math.max(1, em) * 100) / 100 };
+  if (sameHit.length) out.sameGeo = contactGeo(sameHit, ringK, ringIdx, glyph, x0, y0, w, h, B);
+  if (crossHit.length) out.crossGeo = contactGeo(crossHit, ringK, ringIdx, glyph, x0, y0, w, h, B);
+  return out;
+}
+
+/**
+ * Where the drawing touches a text, so a report can say it in words: which side of the letters the contact is on
+ * (share of contact px above / below / left / right of the ink, or in the middle band between and through the
+ * letters), how far it spans along the text, its mean colour, and its box in output px.
+ */
+function contactGeo(hit, ringK, ringIdx, glyph, x0, y0, w, h, B) {
+  let gx0 = w, gy0 = h, gx1 = -1, gy1 = -1;
+  for (let k = 0; k < w * h; k++) if (glyph[k]) { const x = k % w, y = (k / w) | 0; if (x < gx0) gx0 = x; if (x > gx1) gx1 = x; if (y < gy0) gy0 = y; if (y > gy1) gy1 = y; }
+  if (gx1 < 0) return null;
+  const gh = Math.max(1, gy1 - gy0), gw = Math.max(1, gx1 - gx0), e = 0.18 * gh;
+  const z = { above: 0, below: 0, left: 0, right: 0, through: 0 }, col = [0, 0, 0];
+  let cx0 = w, cy0 = h, cx1 = -1, cy1 = -1;
+  for (const i of hit) {
+    const k = ringK[i], x = k % w, y = (k / w) | 0, o = ringIdx[i];
+    z[y < gy0 + e ? 'above' : y > gy1 - e ? 'below' : x < gx0 + e ? 'left' : x > gx1 - e ? 'right' : 'through']++;
+    col[0] += B[o]; col[1] += B[o + 1]; col[2] += B[o + 2];
+    if (x < cx0) cx0 = x; if (x > cx1) cx1 = x; if (y < cy0) cy0 = y; if (y > cy1) cy1 = y;
+  }
+  const n = hit.length, hex = '#' + col.map(v => Math.round(v / n).toString(16).padStart(2, '0')).join('');
+  for (const k in z) z[k] = Math.round(z[k] / n * 100) / 100;
+  return { zones: z, color: hex, hspan: Math.round(Math.min(1, (cx1 - cx0) / gw) * 100) / 100, vspan: Math.round(Math.min(1, (cy1 - cy0) / gh) * 100) / 100,
+           box: [x0 + cx0, y0 + cy0, x0 + cx1 + 1, y0 + cy1 + 1] };
 }
 
 // ---------------------------------------------------------------- what render.py calls
@@ -307,8 +387,48 @@ function render(t, mode) {
   if (mode === 'record') { QA.texts = []; QA.boxes = []; QA.offscreen = []; }
   MV.lastError = null;
   const c = outCtx();
-  try { MV.renderAt(c, t); } finally { QA.on = false; QA.mode = 'off'; }
+  MV.noOverlay = mode === 'bare';                      // 'bare': the picture alone, no lyrics and no screen layer
+  try { MV.renderAt(c, t); } finally { QA.on = false; QA.mode = 'off'; MV.noOverlay = false; }
   return c;
+}
+/**
+ * How much of the picture the lyrics hide: the footprint is where the frame differs from the bare picture (no
+ * lyrics, no screen layer) — glyphs, and the bars / plates the screen layer lays behind them; the picture's detail
+ * is its edges. Measured at 1/4 size. { hidden: share of the picture's edge pixels under the footprint, area: share
+ * of the frame the footprint covers, edges, under: [names of MV.focus points under it] }.
+ */
+const SMALL = { w: 0, h: 0 };
+function small(c) {
+  const w = Math.round(W / 4), h = Math.round(H / 4);
+  if (!SMALL.c || SMALL.w !== w) { SMALL.c = mk(w, h); SMALL.w = w; SMALL.h = h; SMALL.g = SMALL.c.getContext('2d', { willReadFrequently: true }); }
+  SMALL.g.drawImage(c.canvas, 0, 0, w, h);
+  return SMALL.g.getImageData(0, 0, w, h).data;
+}
+function coverage(SA, SC, focus) {
+  const w = SMALL.w, h = SMALL.h, L = new Float32Array(w * h), fp = new Uint8Array(w * h);
+  let area = 0;
+  for (let k = 0; k < w * h; k++) {
+    const o = k * 4;
+    L[k] = 0.2126 * SC[o] + 0.7152 * SC[o + 1] + 0.0722 * SC[o + 2];
+    if (Math.max(Math.abs(SA[o] - SC[o]), Math.abs(SA[o + 1] - SC[o + 1]), Math.abs(SA[o + 2] - SC[o + 2])) > 32) { fp[k] = 1; area++; }
+  }
+  let edges = 0, under = 0;
+  for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+    const k = y * w + x;
+    if (Math.abs(L[k + 1] - L[k - 1]) + Math.abs(L[k + w] - L[k - w]) <= 48) continue;
+    edges++;
+    if (fp[k]) under++;
+  }
+  const hit = (fx, fy) => {
+    const cx = Math.round(fx / 4), cy = Math.round(fy / 4);
+    for (let y = cy - 3; y <= cy + 3; y++) for (let x = cx - 3; x <= cx + 3; x++)
+      if (x >= 0 && y >= 0 && x < w && y < h && fp[y * w + x]) return true;
+    return false;
+  };
+  // dens: how busy the picture is under the lyrics, against the frame as a whole (1 = as busy as the average spot)
+  const dens = edges && area ? Math.round((under / area) / (edges / (w * h)) * 100) / 100 : 0;
+  return { hidden: edges ? Math.round(under / edges * 1000) / 1000 : 0, area: Math.round(area / (w * h) * 1000) / 1000, edges, dens,
+           under: focus.filter(f => hit(f.x, f.y)).map(f => ({ name: f.name, entry: f.entry })) };
 }
 function rnd(b) { return b.map(v => Math.round(v * 10) / 10); }
 
@@ -337,9 +457,11 @@ G.MV_QA = {
     const act = MV.activeAt(t), top = act[act.length - 1];
     const solo = act.length <= 1 || !(top.fadeIn && t < top.from + top.fadeIn);
     const A = ids.length || (opt && opt.touch) ? c.getImageData(0, 0, W, H).data : null;
+    const SA = opt && opt.touch && !post.remapped ? small(c).slice() : null;
     let B = null;
     if (ids.length && texts.some(x => x.lyric)) { const c2 = render(t, 'nolyric'); B = c2.getImageData(0, 0, W, H).data; }
     if (QA.debug) { QA.A = A; QA.B = B; }
+    const cover = SA ? coverage(SA, small(render(t, 'bare')), focus) : null;
     const T = texts.map(tx => { const M = full(tx, M0), q = inkQuad(tx, M); return { tx, M, n: normMap(tx.s), q, box: aabb(q), px: fontPx(tx.font) * scaleOf(M) }; });
     const ws = MV.lyrics.words;
     const words = ids.map(i => {
@@ -355,7 +477,7 @@ G.MV_QA = {
         if (k >= 0) {
           const s = glyphStats(o.tx, o.n.idx[k], o.n.idx[k + nw.length], o.M, A, B);
           const vis = s.ink > 0 ? s.visible / s.ink : 0;
-          if (!best || vis > best.vis) best = { vis, off: s.ink > 0 ? 1 - s.inside / s.ink : 0, box: s.box, px: o.px, s: o.tx.s, alpha: o.tx.alpha, touch: s.touch };
+          if (!best || vis > best.vis) best = { vis, off: s.ink > 0 ? 1 - s.inside / s.ink : 0, box: s.box, px: o.px, s: o.tx.s, alpha: o.tx.alpha, touch: s.touch, cross: s.cross, geo: s.geo };
         } else if (o.n.n.length >= 2 && nw.includes(o.n.n)) {   // the word is drawn in pieces (syllables, letters)
           const s = glyphStats(o.tx, 0, o.tx.s.length, o.M, A, B);
           partial.ink += s.ink; partial.visible += s.visible; partial.inside += s.inside; partial.cover += o.n.n.length;
@@ -368,19 +490,19 @@ G.MV_QA = {
         if (!best || vis > best.vis) best = { vis, off: 1 - partial.inside / partial.ink, box: partial.box, px: partial.px, s: '(pieces)' };
       }
       if (!best) return { i, status: post.remapped || offscreen.some(o => o.includes(nw)) ? 'offscreen' : 'missing' };
-      return { i, status: 'ok', vis: Math.round(best.vis * 1000) / 1000, off: Math.round(best.off * 1000) / 1000, box: rnd(best.box), px: Math.round(best.px), s: best.s, touch: best.touch || 0 };
+      return { i, status: 'ok', vis: Math.round(best.vis * 1000) / 1000, off: Math.round(best.off * 1000) / 1000, box: rnd(best.box), px: Math.round(best.px), s: best.s, touch: best.touch || 0, cross: best.cross || 0, geo: best.geo || {} };
     });
+    const tt = o => opt && opt.touch && A && o.px >= 24 && !post.remapped ? textTouch(o.tx, o.M, A) : { same: 0, cross: 0 };
     return {
       t, err, solo, shots: act.map(e => e.i), post,
-      texts: T.map(o => ({ s: o.tx.s.slice(0, 80),
-                           touch: opt && opt.touch && A && o.px >= 24 && !post.remapped ? textTouch(o.tx, o.M, A) : 0, q0: o.tx.where === 'out' ? null : aabb(inkQuad(o.tx, new DOMMatrix(o.tx.m))).map(v => Math.round(v)),
-                           lyric: o.tx.lyric, lines: o.tx.lines, px: Math.round(o.px * 10) / 10, box: rnd(o.box), q: o.q.map(rnd), entry: o.tx.entry, alpha: o.tx.alpha, where: o.tx.where, owner: o.tx.owner })),
+      texts: T.map(o => ({ s: o.tx.s.slice(0, 80), ...(({ same, cross, sameGeo, crossGeo }) => ({ touch: same, cross, geo: { sameGeo, crossGeo } }))(tt(o)), q0: o.tx.where === 'out' ? null : aabb(inkQuad(o.tx, new DOMMatrix(o.tx.m))).map(v => Math.round(v)),
+                           lyric: o.tx.lyric, decor: o.tx.decor, lines: o.tx.lines, px: Math.round(o.px * 10) / 10, box: rnd(o.box), q: o.q.map(rnd), entry: o.tx.entry, alpha: o.tx.alpha, where: o.tx.where, owner: o.tx.owner })),
       boxes: boxes.map(b => {
         const B = full(b, M0), [x, y, w, h] = b.rect;
         const q = [[x, y], [x + w, y], [x + w, y + h], [x, y + h]].map(([u, v]) => { const p = B.transformPoint({ x: u, y: v }); return [p.x, p.y]; });
         return { name: b.name, pad: b.pad, entry: b.entry, owner: b.owner, where: b.where, alpha: b.alpha, box: rnd(aabb(q)), rect: b.rect, m: [B.a, B.b, B.c, B.d, B.e, B.f] };
       }),
-      focus, words,
+      focus, words, cover,
     };
   },
   /** how much the picture (lyrics left out) changes across times: share of 1/4-size pixels that moved, per step */

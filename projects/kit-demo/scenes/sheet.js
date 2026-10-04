@@ -19,6 +19,7 @@ MV.scene('sheet', {
     });
     // the lyric goes on the screen layer (MV.overlay): drawn after the camera, so the insert can punch in hard on the
     // marker while the line stays put. On the scene canvas it would need MV.keep, and the insert could only creep.
-    MV.overlay(o => D.line(o, f, { x: 960, y: 210, size: 64, maxW: 1000, align: 'center' }));   // whispered: small
+    // it sits in the sheet's empty top-left corner: the punch-in carries the ring outwards, never into the words
+    MV.overlay(o => D.line(o, f, { x: 150, y: 300, size: 64, maxW: 780 }));   // whispered: small
   },
 });

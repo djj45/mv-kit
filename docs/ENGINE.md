@@ -60,15 +60,18 @@ render(g, f) {
 }
 ```
 
-### 给镜头和 qa 的声明：MV.focus / MV.keep / MV.box / MV.group
+### 给镜头和 qa 的声明：MV.focus / MV.keep / MV.box / MV.group / MV.lyric / MV.decor
 
 场景在 `render()` 里顺手报这几样东西，`kits/camera.js` 用它们运镜，`render.py qa` 用它们检查。都很便宜，不开 qa 时几乎不花时间。
 
 - `MV.focus(x, y, name)`：这一帧**眼睛该看的东西**在哪（场景画布坐标）：笔尖、火头、正在长的那一端、角色的脸。每帧都报。一帧里可以报好几个，**最后报的那个是主体**：camera 的 `insert` 跟着它推近，qa 检查它从不跑出画面（`focus-out`）；之前报的（lib 顺手报的每个角色）推近时出画不算错。所以主体放在最后报。
+  主体**故意离开画面**（曲线冲出上缘、回形针掉出去、手抽走胶片）：它在画里时报它；一出画就改报眼睛接下来看的东西（它留下的字、下一个主体）。不要把坐标夹在画面边上——`insert` 跟着 `MV.focus` 推，夹在边上的点会把推近拖到画面边上。
 - `MV.keep(g, x, y, w, h)`：**不许被镜头推出画面**的矩形（一句歌词、一个标题），按 g 当前的坐标。camera 推近时宁可少推，也不把它推到离边 96 px 以内。`BOX.text(…, { keep: true })` 会自己报。代价是：画面上有 keep 框时 `insert` 只能轻推；要真正推进局部，把歌词画进屏幕层（`MV.overlay`，见上），就不用 keep 了。
 - `MV.box(g, x, y, w, h, { name, pad, owner })`：**字要装在里面**的框：表格的格子、标题栏的一行、标签牌、终端面板。
 - `MV.group(tag, fn)`：fn 里画的框和字算**同一个主人**。框和"它自己的字"要在同一个 group 里画（或者先 `const id = MV.owner('table')`，框传 `{ owner: id }`，字在 `MV.within(id, () => g.fillText(…))` 里画）。qa 对**自己的字**从严：必须在框里、四边留够余量，跨出去是错误（`box-cross` / `box-tight`）；**别人的字**碰到这个框只算撞车（`box-clash`，警告）：被框线切过、或者压在框里自己的字上。完全落在别人框里、底下也没压着字的，不报——qa 不知道它是不是本该在那儿；想让它被严查，就画进那个框的 group。
   `kits/layout.js` 的 `BOX.table / BOX.cell / BOX.panel / BOX.lines` 已经自己分好主人；自己写的框助手（标题栏、规格表）在函数外面包一层 `MV.group`。
+- `MV.lyric(fn)`：fn 画的是**一句歌词和跟着它的东西**——字后面的底条、牌子、色块。照常画；qa 只是知道这些都属于歌词，量"歌词挡住了多少画面"（`lyric-cover`）时把它们一起拿掉，看底下的画。项目自己的歌词助手整个包一层：`WD.line = (g, f, o) => MV.lyric(() => line(g, f, o))`。画在屏幕层（`MV.overlay`）里的东西本来就算歌词这一侧，不用再包。
+- `MV.decor(fn)`：fn 画的字是**画面的一部分，不是歌词**——印在道具上、织进布里、写在图表上的歌词里的词（织布机上的 "P(doom)"、曲线旁的 "AGI"）。qa 按词认歌词，这种字不包就会被当成歌词画了两遍（`lyric-overlap`）或跨镜头（`lyric-carryover`）。包进去之后它按普通的字查（`text-touch`、`text-cut`、`box-clash`）。整词画，不要为了躲 qa 一个字母一个字母地画。
 
 ## 时间线（timeline.js）
 
@@ -103,7 +106,7 @@ MV.timeline(({ lyrics, audio, cut, after, start, T0, T1 }) => [
 
 | 名字 | 用在什么时候 | 参数 |
 |---|---|---|
-| `zoom` | 匹配剪辑：旧镜头里的一个物体落到新镜头里同一个（或形状呼应的）物体上，推进去（变大）或拉出来（变小）；新画面先从物体里透出来，再铺满 | `match: [a, b]`（矩形 `[x, y, w, h]`、`'full'`，或场景锚点的名字）、`shape: 'rect' \| 'round'`（物体的外形）、`feather`（透出来的软边，0.2）、`blend`（纸面上用 `'darken'`：只有笔画叠在一起，纸还是纸；暗底用 `'lighten'`）、`ease` |
+| `zoom` | 匹配剪辑：旧镜头里的一个物体落到新镜头里同一个（或形状呼应的）物体上，推进去（变大）或拉出来（变小）；新画面先从物体里透出来，再铺满。两个锚点得**大小悬殊**（小物体 → 下一镜的一大块或 `'full'`，或反过来）：差不多大时它只是把一张画平移到另一张上，`check` 会提示 | `match: [a, b]`（矩形 `[x, y, w, h]`、`'full'`，或场景锚点的名字）、`shape: 'rect' \| 'round'`（物体的外形）、`feather`（透出来的软边，0.2）、`blend`（纸面上用 `'darken'`：只有笔画叠在一起，纸还是纸；暗底用 `'lighten'`）、`ease` |
 | `pan` | 两个镜头是同一个空间里相邻的地方，镜头平移过去。方向有语法：`right` 往后的时间，`left` 往前的时间，`down` 更深，`up` 上浮 | `dir`、`gap`（像素）、`ease` |
 | `reflow` | 旧画面拆成颗粒，飞到新画面的笔画上落定（按希尔伯特曲线配对，相邻的还相邻）。笔画 = 和整张画主色调不同的格子，纸上的墨、黑底上的光都适用 | `dot: 'round' \| 'square' \| 'glyph' \| fn(g, x, y, r, rgb, alpha, i, k)`（风格包可以往 `MV.reflowDots` 加）、`count`（1400）、`cell`（8 px）、`size`、`swirl`（弧度）、`threshold`、`boost`、`ghost`（中间留多少两张画的影子） |
 
@@ -126,6 +129,7 @@ MV.timeline(({ lyrics, audio, cut, after, start, T0, T1 }) => [
 - `lyrics.get('sudden drop', nth)` → 行 `{text, start, end, words: [{w, start, end, conf, syl?, join?}]}`。按内容找，别写死时间。
 - `lyrics.findWords('P(doom)')`、`lyrics.lineAt(t)`、`lyrics.wordAt(t)`
 - `lyrics.lineAt(f.t, f.from)`：**这个镜头**该显示的那一句。切点之前已经唱完的句子不带进来（否则它会换上新镜头的样式在开头闪几帧，qa 报 `lyric-carryover`）；切在一句中间、切点之后还有词要唱的，照常带进来。场景里取"当前句"一律这样写，自己写的取句函数也照这条规则。
+  另一头也管：`f.lyrics.lineAt` 还会自动去掉**下一个镜头接手之后才开始的句子**（`f.until`：交叉淡化 / zoom / reflow 里新镜头的起点；硬切时就是 `f.to`）。所以转场重叠的那段里，旧镜头不会用自己的样式把新镜头的那一句再画一遍（qa 报 `lyric-handover`）。用 `MV.lyrics.lineAt` 绕过 `f.lyrics` 时要自己传第三个参数 `until`。
 - `MV.Lyrics.wordProgress(word, t)` → 0..1
 - `lyrics.tokens(line)` → 给 `karaoke()` 用的 `[{text, start, end, join}]`（中日文逐字，`join` 表示后面不加空格）
 
@@ -161,7 +165,7 @@ MV.timeline(({ lyrics, audio, cut, after, start, T0, T1 }) => [
   g.save(); g.translate(AX, AY); g.scale(s, s); g.translate(-AX, -AY); /* 画世界 */ g.restore();
   MV.focus(AX + (tip[0] - AX) * s, AY + (tip[1] - AY) * s, 'pen tip');
   ```
-- 所有推近都受 `MV.keep` 的框限制（离边至少 `project.qa.margin`，默认 96 px）。歌词留在场景画布上又报了 keep，`insert` 就只能推几个百分点；要推得狠（钻进一个局部、冲进瞳孔），把歌词画进屏幕层 `MV.overlay`：世界在推，字钉在原地，keep 不再需要。
+- 所有推近都受 `MV.keep` 的框限制（离边至少 `project.qa.margin`，默认 96 px）。已经比这更贴边的框，推近不会再把它往外带：朝它那一侧就不推了（以前这种框会被跳过，字被推出画）。歌词留在场景画布上又报了 keep，`insert` 就只能推几个百分点；要推得狠（钻进一个局部、冲进瞳孔），把歌词画进屏幕层 `MV.overlay`：世界在推，字钉在原地，keep 不再需要。
 
 **layout.js**（放进框里的字；不要再手写 x / y）：
 - `BOX.font(g, size, { font, weight, track })`：font 可以是 CSS 字体名，也可以是项目自己的设置函数（如 `LK.mono`）。
@@ -210,7 +214,7 @@ lmTerminal(g, f);
 - `lmEnd(g, o)`：`bloom`（强度）、`radius`（0..1 光晕宽度）、`levels`、`exposure`、`ca`（边缘色差）、`lens`（边缘压暗）、`blend: 'screen'`（不画底色，把光叠到 g 上已有的画面上）。一帧里可以 begin / end 多次。
 - 形状 `LG`：点云 `sphere`（斐波那契球面）`ball` `gauss`（高斯团）`box` `disk`（向日葵盘）`ring` `galaxy`（旋臂星系）`stars`（远处星尘）`text`（文字采样成点，em 单位）`along`（沿折线撒点：粒子尘拉成的线）；线段 `seg`（折线）`pairs` `edges` `poly('tetra'|'cube'|'octa'|'icosa'|'dodeca')` `wirebox` `grid` `circle` `curve` `join`。
 - `lmMorph(A, B, k, o)`：每个点从 A 飞到 B（`stagger` 错开、`swirl` 弧线、`ease`），点数可以不同；`o.out` 复用输出数组。这是这类片子不硬切的转场：一个图形散开、飞成下一个图形。
-- 文字（Canvas 2D，画在 `lmEnd` 之后）：`lmTerminal`（左下终端歌词：`> ` 提示符，唱到的词逐字打出，方块光标在拍子上闪，旧行上移变暗；唱完 `commit` 秒后换新提示符；`status` 是下面一行小字状态，`since` 隐藏之前的行）；`lmCaption`（底部居中字幕：逐字淡入并微微上浮，`track` 字距）；`lmHud`（四角细框 + 左上"镜头号 时间码 名字" + 右上键值读数 + 右下注脚，`on` 用 `lmFlick` 做通电闪烁）；`lmSection(g, 2, 6, '标题', 'SUB')`（章节号）；`lmTag`（小号宽字距标签）；`lmLabel`（圆点 + 折线引线 + 字，`draw` 0..1 动画，纸面模式自动垫底色）；`lmBig`（宽字距大字：`reveal` 逐字出现、`decode` 乱码解出、`glitch` 跳字换色）；`lmCode`（带行号、关键字着色、逐字打出的代码块）；`lmCodeBg`（满屏暗代码纹理，`lmSource('镜头名')` 取这个镜头自己的源码）；`lmCount / lmFmt`（数字滚动和千分位）。字体 `LM_MONO`（等宽）、`LM_SANS`（细黑，中文用苹方 / 思源）。
+- 文字（Canvas 2D，画在 `lmEnd` 之后）：`lmTerminal`（左下终端歌词：`> ` 提示符，唱到的词**整词**在它的 start 打出、落下时闪一下 accent 色，方块光标在拍子上闪，旧行整体上移变暗；唱完 `commit` 秒后换新提示符；`status` 是下面一行小字状态；切点之前已经唱完的句子不带进镜头，也不当历史行画——`since` 默认就是 `f.from`）；`lmCaption`（底部居中字幕：逐词 0.16 s 淡入并微微上浮，`track` 字距，一个词一次 `fillText`）。两个都是 qa 安全的：**不要自己写逐字母打字的歌词**——qa 在词的 start 之后 0.03–0.3 s 看它，长词打到一半就是 `lyric-hidden` / `lyric-missing`；要打字机的感觉，就让整词落下时闪一下。`lmAmbient(lmGlow(), f, { gain })`（几团大而淡的光在画面里缓慢漂移、随低频呼吸：点云稀疏的暗场静镜逐帧变化太小，qa 会报 `static`，先加它，比硬加运动自然；`gain: 0.5` 只留一点）；`lmHud`（四角细框 + 左上"镜头号 时间码 名字" + 右上键值读数 + 右下注脚，`on` 用 `lmFlick` 做通电闪烁）；`lmSection(g, 2, 6, '标题', 'SUB')`（章节号）；`lmTag`（小号宽字距标签）；`lmLabel`（圆点 + 折线引线 + 字，`draw` 0..1 动画，纸面模式自动垫底色）；`lmBig`（宽字距大字：`reveal` 逐字出现、`decode` 乱码解出、`glitch` 跳字换色）；`lmCode`（带行号、关键字着色、逐字打出的代码块）；`lmCodeBg`（满屏暗代码纹理，`lmSource('镜头名')` 取这个镜头自己的源码）；`lmCount / lmFmt`（数字滚动和千分位）。字体 `LM_MONO`（等宽）、`LM_SANS`（细黑，中文用苹方 / 思源）。
 - 后期：镜头 `render` 返回 `{ glitch: 0..1 }` 整帧撕裂（横条错位 + RGB 分离 + 少量错位块），放在拍点上；时间线遮罩转场 `wipe: 'glitch'`（新镜头从闪烁的横条里出现）。
 - 配合：`project.post` 设 `grain ≈ 0.03`、`vignette: 0`（暗角在 `lmEnd` 里按调色板做），`background: '#000'`。网格、星尘、几何都在 `init()` 里建好；大数组（> 4096 个数）按对象缓存到 GPU，原地修改要 `arr.__v++`（`lmMorph` 自动做），小数组每次直接上传。
 
@@ -279,9 +283,11 @@ render(g, f) {
 | `lyric-missing` | 警告 | 唱到的词根本没有作为文字画出来（先画进离屏图层再贴上的，如点阵字，算"无法测量"，只计数不报） |
 | `lyric-edge` | 警告 | 唱到的词离画面边缘不到 `qa.margin`（96 px） |
 | `lyric-covered` | 警告 | 这一镜早先唱过、还画着的词，后来被盖住了（显示不到一半）：有东西移到它上面，或者推近把画面推到了屏幕层歌词底下。qa 在每镜第一帧和 15 / 50 / 85 % 处回头看 |
-| `lyric-touch` | 警告 | 唱到的词贴上了**和它同色**的东西：字母外面一圈（0.06 em 宽）里超过 7 % 是字自己的颜色（在不带歌词的那张图里量）——一条线从字中间穿过、字母站在坐标轴或框线上、推近把门框推到屏幕层的字底下。看着像删除线或粘在线上。`qa.touch` 调阈值 |
-| `text-touch` | 警告 | 同一件事，量的是其他字（24 px 以上：印章、标题、大数字、当装饰用的歌词词）：从成片里量，颜色取它画的时候的 fillStyle。黑色印章压在黑色图上、刻度数字被指针或条纹吞掉。`qa.touchText`（默认 20 %）。禁令牌的斜杠压在符号上这种本来就要叠的，保留并在 TREATMENT 写理由 |
+| `lyric-cover` | 警告 | **歌词挡住了画面**：歌词的字和它后面的底条 / 牌子（屏幕层里的，或场景里 `MV.lyric` 包着的）盖住了画面细节（边缘）的 8 % 以上，而且放在画面比平均更密 1.5 倍的地方（压在画上，不在空处）；或者盖住 25 % 以上；或者压在这一镜的主体（最后一个 `MV.focus`）上。在每镜第一帧和 15 / 50 / 85 % 处看。`qa.cover` 调阈值 |
+| `lyric-touch` | 警告 | （`lyric-touch` / `text-touch` 的报告都写出**接触在哪**：在字的哪一侧——上、下（沿基线）、左右端、字母之间穿过——各占多少、沿字跨了多宽、接触处的颜色、像素坐标、最近的 `MV.focus`，不用开截图就能定位。）唱到的词贴上了**和它同色**的东西：字母外面一圈（0.06 em 宽）里超过 7 % 是字自己的颜色（在不带歌词的那张图里量）——一条线从字中间穿过、字母站在坐标轴或框线上、推近把门框推到屏幕层的字底下。看着像删除线或粘在线上。`qa.touch` 调阈值。**也报不同色的**：任何颜色的画（灰色栅栏柱、绿色曲线、蓝色放射线、点、伸过来的手）伸进字里——比底色明显的线碰到的字母轮廓加起来超过 0.6 em（`qa.cross`）。一条线直穿一个词，每穿过一个字母大约碰两个线宽 |
+| `text-touch` | 警告 | 同一件事，量的是其他字（24 px 以上：印章、标题、大数字、当装饰用的歌词词）：从成片里量，颜色取它画的时候的 fillStyle。黑色印章压在黑色图上、刻度数字被指针或条纹吞掉；别的颜色的画伸进字里超过 0.8 em（`qa.crossText`）：回形针压在数字上、手压在印章上、线穿过标签。`qa.touchText`（默认 20 %）。禁令牌的斜杠压在符号上、故意划掉的字这种本来就要叠的，保留并在 TREATMENT 写理由 |
 | `lyric-carryover` | 警告 | 新镜头把**切点之前已经唱完的那一句**又画了一遍（换了新镜头的样式和位置）：上一镜的最后一句在下一镜开头闪一下。一句只有在切点之后还有词要唱时才跨镜头；唱完了，新镜头就先空着，等自己那一句开始。qa 在每个镜头的第一帧都看一次 |
+| `lyric-handover` | 警告 | 转场（交叉淡化、zoom、reflow）重叠的那段里，**旧镜头把新镜头的那一句**（切点之后才开始的句子）按自己的样式和位置画了出来：这句话同时出现两份，一份在淡出。用 `f.lyrics.lineAt(f.t, f.from)` 取句就不会这样（它会去掉 `f.until` 之后开始的句子） |
 | `lyric-overlap` | 警告 | 两段歌词文字叠在一起（重叠超过小的那段的 20 %，而且中心错开——描边、投影那种原地重画不算）：通常是两句、或同一句画了两次挤在同一个位置 |
 | `box-cross` | 错误 | 框**自己的字**（同一个 `MV.group`）跨出了框，或者不在这组的任何一个框里（掉出了表格） |
 | `box-tight` | 警告 | 框自己的字在框里，但某一边的余量不到墨迹高度的 40 %（至少 3 px；`MV.box` 的 `pad` 可改） |

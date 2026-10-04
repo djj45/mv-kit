@@ -6,7 +6,7 @@
   uv run tools/render.py projects/my-song stills --t 12.5,20,31.2
   uv run tools/render.py projects/my-song sheet --cuts      # 3 frames per shot (start / middle / end)
   uv run tools/render.py projects/my-song sheet --n 24      # 24 evenly spaced frames
-  uv run tools/render.py projects/my-song strip --t 40.2 --dur 1.2   # a frame every 0.2 s from 40.2 s (key actions)
+  uv run tools/render.py projects/my-song strip --t 40.2 --dur 1.2   # a frame every 0.2 s from 40.2 s (key actions) → out/strip-<t>.png
   uv run tools/render.py projects/my-song check             # load, list shots, render one frame per shot, report errors,
                                                             # then the edit's problems no frame shows (MV.lint)
   uv run tools/render.py projects/my-song qa                # measure what a viewer sees: every sung word really on screen,
@@ -62,7 +62,7 @@ ap.add_argument('--n', type=int, default=0, help='sheet: N evenly spaced frames'
 ap.add_argument('--cuts', action='store_true', help='sheet: start / middle / end of every shot')
 ap.add_argument('--dur', type=float, default=1.2, help='strip: seconds to cover')
 ap.add_argument('--step', type=float, default=0.2, help='strip: seconds between frames')
-ap.add_argument('--cols', type=int, default=3)
+ap.add_argument('--cols', type=int, default=0, help='sheet: 3 (one shot per row with --cuts); strip: one row, up to 8 a row')
 ap.add_argument('--out')
 a = ap.parse_args()
 
@@ -231,8 +231,15 @@ def main():
                 strip = a.mode == 'strip'
                 tw = 480 if strip else 640
                 th = round(tw * info['height'] / info['width'])
-                cols = (a.cols if a.cols != 3 else 4) if strip else a.cols
-                rows = (len(imgs) + cols - 1) // cols
+                n = len(imgs)
+                if a.cols:
+                    cols = a.cols
+                elif strip:                                  # one row; longer strips in even rows (no empty tail)
+                    rows = (n + 7) // 8
+                    cols = (n + rows - 1) // rows
+                else:
+                    cols = 3
+                rows = (n + cols - 1) // cols
                 sheet = Image.new('RGB', (cols * tw, rows * th), 'black')
                 dr = ImageDraw.Draw(sheet)
                 for i, (t, png) in enumerate(imgs):
@@ -245,7 +252,12 @@ def main():
                     label = f'{t:.2f}  {shot}'
                     dr.rectangle([x, y, x + 8 + 8 * len(label), y + 18], fill=(0, 0, 0))
                     dr.text((x + 4, y + 3), label, fill=(255, 255, 255))
-                f = Path(a.out) if a.out else OUT / ('strip.png' if strip else 'sheet.png')
+                for i in range(n, rows * cols):              # unused tiles: say so, so nobody reads them as black frames
+                    x, y = (i % cols) * tw, (i // cols) * th
+                    dr.rectangle([x, y, x + tw - 1, y + th - 1], fill=(40, 40, 40))
+                    dr.text((x + tw // 2 - 30, y + th // 2 - 6), '(no frame)', fill=(150, 150, 150))
+                # a strip is named after where it starts, so looking at a second action keeps the first
+                f = Path(a.out) if a.out else OUT / (f'strip-{ts[0]:07.2f}.png' if strip else 'sheet.png')
                 f.parent.mkdir(parents=True, exist_ok=True)
                 sheet.save(f)
                 print(f)
