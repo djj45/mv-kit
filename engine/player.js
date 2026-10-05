@@ -13,7 +13,8 @@ MV.start = async function () {
   if (!cv) { cv = document.createElement('canvas'); cv.id = 'mv'; document.body.appendChild(cv); }
   try { await document.fonts.ready; await MV.setup(); }
   catch (err) { fatal(err); return; }
-  cv.width = W; cv.height = H;
+  cv.width = Math.round(W * MV.scale); cv.height = Math.round(H * MV.scale);   // the output: design units × MV.scale pixels
+  if (MV.scale !== 1) { cv.__k = MV.scale; cv.getContext('2d').setTransform(1, 0, 0, 1, 0, 0); }
   const ctx = cv.getContext('2d');
   const P = MV.project;
   let lint = [];
@@ -24,7 +25,7 @@ MV.start = async function () {
     document.body.classList.add('export');
     G.MV_EXPORT = {
       model: name => { MV.lastError = null; return MV.modelSheet(name).toDataURL('image/png'); },
-      info: { title: P.title, from: P.from, to: P.to, fps: P.fps, width: W, height: H, audio: P.audio, warnings: MV.warnings, lint,
+      info: { title: P.title, from: P.from, to: P.to, fps: P.fps, width: cv.width, height: cv.height, design: [W, H], scale: MV.scale, audio: P.audio, warnings: MV.warnings, lint,
               shots: MV.entries.map(e => ({ name: e.name, scene: e.scene, from: e.from, to: e.to, until: e.until, fadeIn: e.fadeIn || 0,
                                              reads: e.reads, src: MV.sceneSrc[e.scene] || null })),
               sceneSrc: MV.sceneSrc, models: Object.keys(MV.models) },

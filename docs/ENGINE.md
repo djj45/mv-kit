@@ -10,6 +10,21 @@
 - 不要在 `render()` 里累积状态（计数器、粒子模拟）。需要的话写成时间的函数（粒子 i 的位置 = f(t − 出生时间)）；写不成闭式解的模拟（沙粒、群鸟、裂纹蔓延、训练发散）用 `kits/sim.js` 的 `SIM.make`：状态定义成「镜头开头 init，再按固定步长一步步算到 t」，所以仍然只由 t 决定（见下「sim.js」）。
 - 静态的东西（背景画、贴图、预计算的几何）在 `MV.onInit(fn)` 或场景的 `init()` 里画好一次。
 
+## 分辨率：1080p 和 4K（MV.scale）
+
+同一个项目可以导出 1080p，也可以导出原生 4K：`uv run tools/render.py projects/X --4k`（= `--scale 2`，输出 `out/<标题>-2160p.mp4`；`stills / sheet / strip` 也能加 `--4k` 看 4K 的画面；`check / qa` 永远按 1× 看，版式在任何倍率下都一样）。
+
+规则只有一条：**场景和风格包永远在设计尺寸里画**。`W × H` 是 `project.js` 的 width / height（1920 × 1080），坐标、字号、线宽、模糊半径、阴影、点的大小、`cam.project` 的结果都是这个尺寸里的"设计像素"。导出时输出和全幅图层有 `MV.scale` 倍的真实像素（4K 时是 2），字和线在 4K 下是重新画出来的，不是放大。
+
+- `g`（场景画布）、屏幕层、转场的两张画面都已经是 `MV.scale` 倍的图层，直接画就行。
+- 自己的**全幅或要上屏的离屏图层**用 `mkHi(w, h)`（w × h 设计尺寸，真实像素 × MV.scale），不要用 `mk(W, H)`。在 mkHi 图层上：`setTransform(1, 0, 0, 1, 0, 0)` 就是"复位到设计尺寸"，`drawImage(图层, x, y)` 按设计尺寸放，`drawImage(图层, sx, sy, sw, sh, …)` 的源矩形也是设计尺寸，`shadowBlur / shadowOffsetX / Y` 和 `filter` 里的 px（`blur(6px)`）是设计像素（Chrome 本来按位图像素算它们，引擎在 mkHi 图层上替你换算），`createPattern(图层)` 按设计尺寸平铺。
+- `mk(w, h)` 还是 1× 的普通画布：给分析（取像素、采样文字点云）、纹理、故意低分辨率的软模糊用。它画到 mkHi 图层上会被放大——位置和大小都对，只是软。
+- **原始像素不换算**：`canvas.width / height`、`getImageData / putImageData` 是真实像素。要设计尺寸用 `MV.sizeOf(c)`；"尺寸对不上就重建"的缓存用 `MV.fits(c, w, h)`，不要写 `c.width !== W`。
+- 风格包里的 WebGL：画布、纹理、帧缓冲按 `W·k × H·k` 建（`k = MV.scale`），`gl_FragCoord` 是真实像素；着色器里所有以 px 计的量（采样半径、网点格子、噪声频率、描边宽度）都换回设计像素再算（`gl_FragCoord / uK`），抗锯齿的过渡带按真实像素（`1 / uK` 设计像素）。mip 级别 + `log2(uK)`。做法见 lumen.js（点线的 uK、泛光在 4K 下多一级从粗一级开始，半径不变）、solid.js、pigment.js、roto.js、print.js。
+- 风格包给的图层也是输出倍率的：`pigmentLayers()` 的 `L.canvases.wet / dry / col`、`qhStickerLayers()` 的遮罩在 4K 下是 2 倍像素。量它们的尺寸用 `L.w / L.h`（设计尺寸），不要用 `canvas.width`；要逐行搬运像素（`drawImage` 的九参数形式）时，源矩形写设计尺寸即可（mkHi 图层会自己换算）。
+- 素材：插画和帧包在 4K 下按自己的分辨率放大。要 4K 清晰就用 3840 宽的图（`tools/frames.py --width 3840`；illust.js 的 `illPrep` 在 4K 下默认保留 3840 px）。
+- `MV.scale` 为 1 时引擎不打任何补丁、不做任何标记：1080p 和没有这套机制之前逐像素一样。
+
 ## 场景
 
 ```js

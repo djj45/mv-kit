@@ -60,6 +60,7 @@ uv run tools/render.py projects/my-song model          # 有角色时：定型�
 
 # 6. 导出
 uv run tools/render.py projects/my-song                       # 1080p，project.js 里的 fps
+uv run tools/render.py projects/my-song --4k                  # 原生 4K（3840×2160，out/<标题>-2160p.mp4）：同一个项目，字和线按 4K 重新画
 uv run tools/render.py projects/my-song --samples 4           # 加运动模糊（慢 4 倍）
 uv run tools/render.py projects/my-song --from 30 --to 45     # 只导一段
 uv run tools/render.py projects/my-song --workers 6           # 并行浏览器数（默认按 CPU 核数，最多 4）

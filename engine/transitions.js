@@ -108,7 +108,7 @@ MV.wipe('zoom', {
       place(g, A, sa, c, ca);
       const ob = smoothstep(0.6, 1, u);
       if (ob > 0) {    // the new shot is smaller than the frame until the end: past its edges lies its edge colour
-        if (!LAYER) LAYER = mk(W, H);
+        if (!LAYER) LAYER = mkHi(W, H);                              // output-scale, like the frames it holds
         const lg = LAYER.getContext('2d');
         lg.setTransform(1, 0, 0, 1, 0, 0); lg.globalAlpha = 1; lg.globalCompositeOperation = 'source-over';
         lg.fillStyle = edgeColor(B); lg.fillRect(0, 0, W, H);

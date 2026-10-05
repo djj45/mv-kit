@@ -51,8 +51,8 @@ const CAM = {
 
   /** redraw canvas `src` into g as a board turned by yaw (and pitch) in perspective; o.bg fills behind it */
   warpPlane(g, src, o) {
-    const w = src.width, h = src.height;
-    if (!WARPBUF || WARPBUF.width !== w || WARPBUF.height !== h) WARPBUF = mk(w, h);
+    const [w, h] = MV.sizeOf(src);                       // design units (an output-scale layer reports its design size)
+    if (!WARPBUF || WARPBUF.width !== src.width || WARPBUF.height !== src.height) WARPBUF = src.__k ? mkHi(w, h) : mk(w, h);
     const b = WARPBUF.getContext('2d');
     b.setTransform(1, 0, 0, 1, 0, 0); b.globalAlpha = 1; b.globalCompositeOperation = 'copy';
     b.drawImage(src, 0, 0);

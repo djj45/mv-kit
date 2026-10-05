@@ -2,6 +2,7 @@
 """Offline renderer: drives a project's index.html in headless Chrome and pipes frames into ffmpeg.
 
   uv run tools/render.py projects/my-song                   # video -> projects/my-song/out/<title>.mp4
+  uv run tools/render.py projects/my-song --4k              # the same film at 3840x2160 -> out/<title>-2160p.mp4
   uv run tools/render.py projects/my-song video --from 30 --to 45 --samples 4
   uv run tools/render.py projects/my-song stills --t 12.5,20,31.2
   uv run tools/render.py projects/my-song sheet --cuts      # 3 frames per shot (start / middle / end)
@@ -18,6 +19,10 @@ Video: the frames are split into --workers contiguous segments, each rendered by
 x264 encoder in parallel, then joined losslessly (no re-encode) and muxed with the song. Frames travel from the
 page as JPEG (quality 0.98, ~47 dB against lossless; x264 at crf 18 loses more than that); --png sends lossless
 PNG frames instead (about 1.7x slower per frame). The video is BT.709, converted and tagged as such.
+
+Resolution: scenes draw in design units (project.js width / height, 1920x1080); --scale K renders every frame
+with K times the pixels (--4k = --scale 2 for a 1920x1080 project). Works for video, stills, sheet and strip;
+check and qa always look at 1x (they measure layout, which is the same at every scale). Engine: core.js mkHi.
 
 Options: --fps N (override), --samples N (motion blur: average N sub-frames), --shutter 0.5 (fraction of a
 frame), --crf 18, --preset slow, --tune animation|film|grain, --workers N (0 = auto: half the cores, at most 4, fewer when the
@@ -68,7 +73,16 @@ ap.add_argument('--step', type=float, default=0.2, help='strip: seconds between 
 ap.add_argument('--cols', type=int, default=0, help='sheet: 3 (one shot per row with --cuts); strip: one row, up to 8 a row')
 ap.add_argument('--name', help='model: only this model sheet (default: all of them)')
 ap.add_argument('--out')
+ap.add_argument('--scale', type=float, default=1.0, help='video / stills / sheet / strip: render K x the design resolution (2 = 4K for 1920x1080)')
+ap.add_argument('--4k', dest='uhd', action='store_true', help='same as --scale 2 (3840x2160 from a 1920x1080 project)')
 a = ap.parse_args()
+if a.uhd:
+    a.scale = 2.0
+if a.scale <= 0:
+    sys.exit('--scale must be > 0')
+if a.mode in ('check', 'qa', 'model') and a.scale != 1:
+    print(f'note: {a.mode} looks at 1x (layout is the same at every scale); --scale ignored')
+    a.scale = 1.0
 
 cfg = load_project(a.project)
 PD = cfg['_dir']
@@ -120,7 +134,7 @@ class Page:
         # missing optional data files are reported as warnings by the engine; required ones set MV_FATAL
         self.page.on('console', lambda m: m.type == 'error' and 'Failed to load resource' not in m.text and errors.append(m.text))
         self.page.on('pageerror', lambda e: errors.append(str(e)))
-        self.page.goto((PD / 'index.html').as_uri() + '?export=1' + ('&qa=1' if a.mode == 'qa' else ''))
+        self.page.goto((PD / 'index.html').as_uri() + '?export=1' + ('&qa=1' if a.mode == 'qa' else '') + (f'&scale={a.scale:g}' if a.scale != 1 else ''))
         try:
             self.page.wait_for_function('window.MV_READY === true || !!window.MV_FATAL', timeout=120000)
         except Exception:
@@ -473,7 +487,7 @@ def video():
         first.close(); p0.stop()
         sys.exit('nothing to render: --to must be after --from')
 
-    out = Path(a.out) if a.out else OUT / f"{cfg.get('title', 'mv').replace(' ', '-')}.mp4"
+    out = Path(a.out) if a.out else OUT / (f"{cfg.get('title', 'mv').replace(' ', '-')}" + (f"-{info['height']}p" if a.scale != 1 else '') + '.mp4')
     out.parent.mkdir(parents=True, exist_ok=True)
     cache = OUT / '.chunks'
     cache.mkdir(parents=True, exist_ok=True)

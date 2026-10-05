@@ -269,7 +269,7 @@ function qhLeaf(L, x, y, a, len, o = {}) {
  * painted first stays behind the figures). */
 /** Pigment layers plus a silhouette mask: every full qhFill / qhLine drawn into L.wet / L.dry also lands in L.mask. */
 function qhStickerLayers(w = W, h = H) {
-  const L = pigmentLayers(w, h), m = mk(w, h);
+  const L = pigmentLayers(w, h), m = mkHi(w, h);           // output-scale, like the pigment layers
   L.maskCanvas = m; L.mask = m.getContext('2d');
   const clear0 = L.clear;
   L.clear = () => { clear0(); L.mask.setTransform(1, 0, 0, 1, 0, 0); L.mask.clearRect(0, 0, w, h); L.wet.qhMask = L.dry.qhMask = L.mask; return L; };
@@ -280,7 +280,7 @@ let STK = null;
 /** Composite a sticker layer set (preset/paper as pigmentDraw) and draw only inside its silhouette. */
 function qhSticker(g, L, o = {}, x = 0, y = 0) {
   const c = pigmentComp(L, o);
-  if (!STK || STK.width !== L.w || STK.height !== L.h) STK = mk(L.w, L.h);
+  if (!MV.fits(STK, L.w, L.h)) STK = mkHi(L.w, L.h);
   const s = STK.getContext('2d'); s.setTransform(1, 0, 0, 1, 0, 0); s.globalCompositeOperation = 'copy'; s.drawImage(c, 0, 0);
   s.globalCompositeOperation = 'destination-in'; s.drawImage(L.maskCanvas, 0, 0); s.globalCompositeOperation = 'source-over';
   g.drawImage(STK, x, y);
@@ -291,25 +291,27 @@ function qhErase(L, pts, o = {}) {
 }
 
 // ---------------------------------------------------------------- the cylinder (WebGL)
+const QH_SC = (MV.scale || 1) !== 1;     // above 1×: the scale-aware expressions are compiled in (1× stays bit-identical)
 const CYL_VS = `#version 300 es
 in vec2 p; void main() { gl_Position = vec4(p, 0., 1.); }`;
 const CYL_FS = `#version 300 es
 precision highp float; out vec4 o;
 uniform sampler2D uTex;
-uniform vec2 uRes;
+uniform vec2 uRes;          // output px; uK = output px per design px (uBox is design px)
+uniform float uK;
 uniform vec4 uBox;          // cx, top, height (px), v0 (texture v at top — for cropping)
 uniform float uR[97];       // radius / height at v = i/96
 uniform float uRot, uGlaze, uV1, uSpec, uAmb, uFlip;
 uniform vec3 uEnv, uLight;
 float R(float v) { float x = clamp(v, 0., 1.) * 96.; int i = int(floor(x)); int j = min(i + 1, 96); return mix(uR[i], uR[j], x - float(i)); }
 void main() {
-  vec2 fc = vec2(gl_FragCoord.x, uRes.y - gl_FragCoord.y);
+  vec2 fc = vec2(gl_FragCoord.x, uRes.y - gl_FragCoord.y)${QH_SC ? ' / uK' : ''};
   float v = (fc.y - uBox.y) / uBox.z;
   if (uFlip > .5) v = 1. - v;
   if (v < 0. || v > 1.) { o = vec4(0.); return; }
   float r = R(v) * uBox.z, dx = fc.x - uBox.x;
   float edge = r - abs(dx);
-  if (edge < -1.) { o = vec4(0.); return; }
+  if (edge${QH_SC ? ' * uK' : ''} < -1.) { o = vec4(0.); return; }
   float s = clamp(dx / max(r, 1e-3), -1., 1.), th = asin(s), c = sqrt(max(0., 1. - s * s));
   float dr = (R(v + .004) - R(v - .004)) / .008;                  // dr/dv (v downward); sign flips if upside down
   if (uFlip > .5) dr = -dr;
@@ -328,12 +330,13 @@ void main() {
   col += uGlaze * uSpec * (streak * .42 + sheen * .12);
   // matte clay: a touch of limb darkening
   col *= mix(1., .93 + .07 * c, 1. - uGlaze);
-  o = vec4(clamp(col, 0., 1.), clamp(edge + .5, 0., 1.));
+  o = vec4(clamp(col, 0., 1.), clamp(edge${QH_SC ? ' * uK' : ''} + .5, 0., 1.));   // a one-output-pixel antialiased silhouette
 }`;
 let CYL = null;
 function cylInit() {
   if (CYL) return CYL;
-  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const c = document.createElement('canvas'); c.width = Math.round(W * MV.scale); c.height = Math.round(H * MV.scale);
+  if (MV.scale !== 1) c.__k = MV.scale;                      // output-scale: drawImage(c, 0, 0) fits W × H
   const gl = c.getContext('webgl2', { preserveDrawingBuffer: true, premultipliedAlpha: false, antialias: false });
   if (!gl) throw new Error('qinghua.js qhCylinder needs WebGL2');
   const sh = (t, src) => { const s = gl.createShader(t); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error('qhCylinder: ' + gl.getShaderInfoLog(s)); return s; };
@@ -357,8 +360,9 @@ function cylInit() {
  */
 function qhCylinder(tex, o = {}) {
   const C = cylInit(), gl = C.gl, u = C.u;
-  if (C.c.width !== W || C.c.height !== H) { C.c.width = W; C.c.height = H; }
-  gl.viewport(0, 0, W, H); gl.useProgram(C.p);
+  const pw = Math.round(W * MV.scale), ph = Math.round(H * MV.scale);
+  if (C.c.width !== pw || C.c.height !== ph) { C.c.width = pw; C.c.height = ph; }
+  gl.viewport(0, 0, pw, ph); gl.useProgram(C.p);
   gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, C.tex);
   if (C.src !== tex || o.fresh) {
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
@@ -369,7 +373,7 @@ function qhCylinder(tex, o = {}) {
     C.src = tex;
   }
   gl.uniform1i(u.uTex, 0);
-  gl.uniform2f(u.uRes, W, H);
+  gl.uniform2f(u.uRes, pw, ph); gl.uniform1f(u.uK, MV.scale);
   gl.uniform4f(u.uBox, o.cx ?? W / 2, o.top ?? 100, o.h ?? 800, o.v0 ?? 0);
   gl.uniform1f(u.uV1, o.v1 ?? 1);
   gl.uniform1fv(u.uR, o.prof);
@@ -415,7 +419,8 @@ function qhChar(g, text, x, y, size, age, lead, fade, st) {
   if (rev >= 1) { g.fillStyle = rgba(st.col, fade); g.fillText(text, x, y); }
   else if (rev > 0) {
     const w = Math.ceil(size * 1.5), h = Math.ceil(size * 1.6);
-    if (!QCH || QCH.width < w || QCH.height < h) QCH = mk(Math.max(w, QCH ? QCH.width : 0), Math.max(h, QCH ? QCH.height : 0));
+    const [qw0, qh0] = QCH ? MV.sizeOf(QCH) : [0, 0];             // output-scale glyph layer: sharp at 4K
+    if (!QCH || qw0 < w || qh0 < h) QCH = mkHi(Math.max(w, qw0), Math.max(h, qh0));
     const c = QCH.getContext('2d'); c.setTransform(1, 0, 0, 1, 0, 0); c.globalCompositeOperation = 'source-over'; c.clearRect(0, 0, QCH.width, QCH.height);
     c.font = font; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillStyle = st.col; c.fillText(text, w / 2, h / 2);
     const fe = size * 0.35, a0 = h / 2 - size * 0.55, edge = lerp(a0, a0 + size * 1.1 + fe, rev);

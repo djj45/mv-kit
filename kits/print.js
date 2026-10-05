@@ -111,12 +111,14 @@ function buildNoise(n = 512) {
 }
 
 // ---------------------------------------------------------------- GLSL
+const PR_SC = (MV.scale || 1) !== 1;     // above 1×: the scale-aware expressions are compiled in (1× stays bit-identical)
 const VS = `#version 300 es
 in vec2 p; void main(){ gl_Position = vec4(p, 0., 1.); }`;
 const FS = `#version 300 es
 precision highp float; precision highp int;
 out vec4 o;
 uniform vec2 res; uniform vec3 cP, cR, cU, cF; uniform float foc;
+uniform float uK;          // output px per design px: res, foc and the camera are design px
 uniform float ppi, pL, pR, pY0, pY1, fog0, fog1;
 uniform sampler2D atlas, noiseT, picT, txtT;
 uniform vec2 aSlot, aGlyph, aPad, aSize;
@@ -142,7 +144,7 @@ float inkEdge(float c, float n, float px){
 }
 
 void main(){
-  vec2 fr = vec2(gl_FragCoord.x, res.y - gl_FragCoord.y);
+  vec2 fr = ${PR_SC ? 'vec2(gl_FragCoord.x, res.y * uK - gl_FragCoord.y) / uK' : 'vec2(gl_FragCoord.x, res.y - gl_FragCoord.y)'};   // design px (fwidth below stays per output pixel)
   vec3 d = normalize(cR*(fr.x - res.x*.5) + cU*(fr.y - res.y*.5) + cF*foc);
   float tt = d.z > 1e-4 ? -cP.z/d.z : -1.;
   vec2 P = cP.xy + tt*d.xy;
@@ -264,7 +266,8 @@ let S0 = null;
 function glState() {
   if (S0) return S0;
   if (!ATLAS) throw new Error('print.js: the glyph atlas is not ready (use it in init / render, not at load time)');
-  const cv = mk(W, H);
+  const cv = mk(W * MV.scale, H * MV.scale);                  // output px; drawImage(cv, 0, 0) on a scaled layer fits W × H
+  if (MV.scale !== 1) cv.__k = MV.scale;
   const gl = cv.getContext('webgl2', { premultipliedAlpha: false, preserveDrawingBuffer: true, antialias: false, alpha: false, depth: false });
   if (!gl) throw new Error('print.js needs WebGL2');
   const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
@@ -547,9 +550,9 @@ function matchSheet(S) {
 function prPrint(g, sheets, o = {}) {
   const s = glState(), gl = s.gl, u = s.u, list = sheets ? [].concat(sheets) : [];
   const cam = o.cam || {}, b = camBasis(cam), ppi = PPI(), pw = 14.875 * ppi;
-  gl.viewport(0, 0, W, H); gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, s.cv.width, s.cv.height); gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   gl.useProgram(s.p); gl.bindBuffer(gl.ARRAY_BUFFER, s.buf); gl.enableVertexAttribArray(s.loc); gl.vertexAttribPointer(s.loc, 2, gl.FLOAT, false, 0, 0);
-  gl.uniform2f(u('res'), W, H); gl.uniform3fv(u('cP'), b.P); gl.uniform3fv(u('cR'), b.R); gl.uniform3fv(u('cU'), b.U); gl.uniform3fv(u('cF'), b.F); gl.uniform1f(u('foc'), b.foc);
+  gl.uniform2f(u('res'), W, H); gl.uniform1f(u('uK'), MV.scale); gl.uniform3fv(u('cP'), b.P); gl.uniform3fv(u('cR'), b.R); gl.uniform3fv(u('cU'), b.U); gl.uniform3fv(u('cF'), b.F); gl.uniform1f(u('foc'), b.foc);
   gl.uniform1f(u('ppi'), ppi); gl.uniform1f(u('pL'), (W - pw) / 2); gl.uniform1f(u('pR'), (W + pw) / 2);
   gl.uniform1f(u('pY0'), o.paperFrom ?? -1e9); gl.uniform1f(u('pY1'), o.paperTo ?? 1e9);
   const fog = o.fog || [b.D * 6, b.D * 14]; gl.uniform1f(u('fog0'), fog[0]); gl.uniform1f(u('fog1'), fog[1]);
@@ -608,7 +611,7 @@ let SLIP = null;
  */
 function prSlip(g, S, rect, o = {}) {
   const [x, y, w, h] = rect;
-  if (!SLIP) SLIP = mk(W, H);
+  if (!SLIP) SLIP = mkHi(W, H);
   const sg = SLIP.getContext('2d');
   prPrint(sg, S, { cam: { x: W / 2, y: H / 2 + S.oy, z: 1 }, seed: o.seed || 0, bars: o.bars ?? 0, ink: o.ink, holes: 0 });
   const sd = (o.seed || 0) * 7 + 3, pts = [], step = 18;

@@ -145,6 +145,9 @@ function lmScreen() {
 }
 
 // ---------------------------------------------------------------- GLSL
+// SC: rendering above 1× (MV.scale is fixed for the whole run). The scale-aware expressions are only compiled in then,
+// so at 1× the shaders are exactly the ones lumen always had (bit-identical 1080p).
+const SC = (MV.scale || 1) !== 1;
 const HASH = `
 uint hu(uint x) { x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16; return x; }
 float hf(uint x) { return float(hu(x)) / 4294967295.; }
@@ -161,7 +164,7 @@ layout(location=2) in vec3 C;
 layout(location=3) in float Sz;
 uniform mat4 uVP, uM;
 uniform vec2 uRes;
-uniform float uSize, uDof, uBlur, uFocus, uRef, uPersp, uGain, uNear, uFog, uInk, uZ;
+uniform float uSize, uDof, uBlur, uFocus, uRef, uPersp, uGain, uNear, uFog, uInk, uZ, uK;
 uniform vec4 uTw;          // twinkle, time, drift, drift speed
 out vec2 vQ; out float vR, vSig, vI, vBok; out vec3 vC;
 ${HASH}
@@ -177,8 +180,8 @@ void main() {
   if (c.w < uNear) { gl_Position = vec4(2., 2., 2., 1.); return; }
   float core = uSize * Sz * (uPersp > .5 ? uRef / c.w : 1.);
   float coc = uBlur + uDof * abs(c.w - uFocus) / c.w;
-  float sig = max(core * .6, .5);
-  float I = uGain * min(1., pow(core * .6 / .5, 2.));            // sub-pixel points get dimmer, not smaller
+  float sig = max(core * .6, ${SC ? '.5 / uK' : '.5'});           // sizes are design px; uK = output px per design px
+  float I = uGain * min(1., pow(core * .6 / ${SC ? '(.5 / uK)' : '.5'}, 2.));   // sub-(output-)pixel points get dimmer, not smaller
   if (uTw.x > 0.) {
     float tt = abs(uTw.y) * 3. + hf(id * 5u + 7u) * 10.;
     float a = hf(id * 13u + uint(floor(tt)) * 7919u), b = hf(id * 13u + uint(floor(tt) + 1.) * 7919u);
@@ -195,10 +198,11 @@ void main() {
 const FS_PTS = `#version 300 es
 precision highp float;
 in vec2 vQ; in float vR, vSig, vI, vBok; in vec3 vC; out vec4 o;
+uniform float uK;
 void main() {
   float d = length(vQ);
   float gs = exp(-d * d / (2. * vSig * vSig));
-  float disk = clamp((vR + .75 - d) / 1.5, 0., 1.) * (2. * vSig * vSig) / max(vR * vR, 1e-3) * (.82 + .3 * smoothstep(vR * .55, vR, d));
+  float disk = clamp(${SC ? '(vR + .75 / uK - d) / (1.5 / uK)' : '(vR + .75 - d) / 1.5'}, 0., 1.) * (2. * vSig * vSig) / max(vR * vR, 1e-3) * (.82 + .3 * smoothstep(vR * .55, vR, d));
   float k = mix(gs, disk, vBok) * vI;
   if (k < .0003) discard;
   o = vec4(vC * k, 1.);
@@ -212,7 +216,7 @@ layout(location=2) in vec3 B;
 layout(location=3) in vec2 BC;         // brightness, caps
 uniform mat4 uVP, uM;
 uniform vec2 uRes;
-uniform float uWidth, uGlowR, uDof, uBlur, uFocus, uNear, uFog, uZ;
+uniform float uWidth, uGlowR, uDof, uBlur, uFocus, uNear, uFog, uZ, uK;
 out float vU, vV, vL, vCoc, vB, vCaps;
 void main() {
   vec4 ca = uVP * uM * vec4(A, 1.), cb = uVP * uM * vec4(B, 1.);
@@ -224,7 +228,7 @@ void main() {
   vec2 d = sb - sa; float L = length(d);
   vec2 dir = L > 1e-4 ? d / L : vec2(1., 0.), nr = vec2(-dir.y, dir.x);
   float cocA = uBlur + uDof * abs(ca.w - uFocus) / ca.w, cocB = uBlur + uDof * abs(cb.w - uFocus) / cb.w;
-  float hw = max(uWidth, 1.) * .5 + max(cocA, cocB) + uGlowR * 4. + 1.5;
+  float hw = ${SC ? 'max(uWidth, 1. / uK) * .5 + max(cocA, cocB) + uGlowR * 4. + 1.5 / uK' : 'max(uWidth, 1.) * .5 + max(cocA, cocB) + uGlowR * 4. + 1.5'};
   float u = corner.x * L + (corner.x * 2. - 1.) * hw, v = corner.y * hw;
   float wq = corner.x < .5 ? ca.w : cb.w;
   gl_Position = vec4((sa + dir * u + nr * v) / (uRes * .5), uZ > .5 ? (corner.x < .5 ? ca.z / ca.w : cb.z / cb.w) : 0., 1.);
@@ -234,7 +238,7 @@ void main() {
 const FS_LIN = `#version 300 es
 precision highp float;
 in float vU, vV, vL, vCoc, vB, vCaps; out vec4 o;
-uniform float uWidth, uGlowA, uGlowR, uGain;
+uniform float uWidth, uGlowA, uGlowR, uGain, uK;
 uniform vec3 uColor;
 uniform vec2 uDash;
 void main() {
@@ -243,8 +247,10 @@ void main() {
   else if (vU > vL) { if (vCaps < 1.5) discard; du = vU - vL; }
   if (uDash.x > 0. && mod(clamp(vU, 0., vL), uDash.x + uDash.y) > uDash.x) discard;
   float d = length(vec2(du, vV));
-  float hw = max(uWidth, 1.) * .5, ww = hw + vCoc, spread = (hw + .5) / (ww + .5);
-  float core = clamp((ww + .6 - d) / 1.2, 0., 1.) * spread * min(uWidth, 1.);
+${SC ? `  float px = 1. / uK;                                              // one output pixel, in design px (the AA ramp)
+  float hw = max(uWidth, px) * .5, ww = hw + vCoc, spread = (hw + .5 * px) / (ww + .5 * px);
+  float core = clamp((ww + .6 * px - d) / (1.2 * px), 0., 1.) * spread * min(uWidth * uK, 1.);` : `  float hw = max(uWidth, 1.) * .5, ww = hw + vCoc, spread = (hw + .5) / (ww + .5);
+  float core = clamp((ww + .6 - d) / 1.2, 0., 1.) * spread * min(uWidth, 1.);`}
   float glow = uGlowA * exp(-d / max(uGlowR, .01)) * spread;
   float k = (core + glow) * vB * uGain;
   if (k < .0003) discard;
@@ -309,22 +315,25 @@ void main() {
 }`;
 const FS_GLITCH = `#version 300 es
 precision highp float; out vec4 o;
-uniform sampler2D uSrc; uniform vec2 uRes; uniform float uAmt, uTick;
+uniform sampler2D uSrc; uniform vec2 uRes; uniform float uAmt, uTick, uK;
 ${HASH}
 void main() {
-  vec2 fc = vec2(gl_FragCoord.x, uRes.y - gl_FragCoord.y);
-  float b1 = floor(fc.y / 72.), b2 = floor(fc.y / 11.), sh = 0.;
+  vec2 fc = vec2(gl_FragCoord.x, uRes.y - gl_FragCoord.y);       // output px; the bands and shifts are design px × uK
+${SC ? `  float b1 = floor(fc.y / (72. * uK)), b2 = floor(fc.y / (11. * uK)), sh = 0.;
+  if (h3(b1, uTick, 1.) < uAmt * .55) sh += (h3(b1, uTick, 2.) - .5) * uAmt * 220. * uK;
+  if (h3(b2, uTick, 3.) < uAmt * .3) sh += (h3(b2, uTick, 4.) - .5) * uAmt * 70. * uK;
+  float ca = uAmt * 7. * uK * (.5 + h3(b1, uTick, 5.));` : `  float b1 = floor(fc.y / 72.), b2 = floor(fc.y / 11.), sh = 0.;
   if (h3(b1, uTick, 1.) < uAmt * .55) sh += (h3(b1, uTick, 2.) - .5) * uAmt * 220.;
   if (h3(b2, uTick, 3.) < uAmt * .3) sh += (h3(b2, uTick, 4.) - .5) * uAmt * 70.;
-  float ca = uAmt * 7. * (.5 + h3(b1, uTick, 5.));
+  float ca = uAmt * 7. * (.5 + h3(b1, uTick, 5.));`}
   vec2 px = 1. / uRes;
   float r = texture(uSrc, (fc + vec2(sh + ca, 0.)) * px).r;
   vec2 gb = texture(uSrc, (fc + vec2(sh, 0.)) * px).ga;
   float b = texture(uSrc, (fc + vec2(sh - ca, 0.)) * px).b;
   vec3 c = vec3(r, gb.x, b);
-  float bx = floor(fc.x / 120.), by = floor(fc.y / 48.);
+  float bx = floor(fc.x / ${SC ? '(120. * uK)' : '120.'}), by = floor(fc.y / ${SC ? '(48. * uK)' : '48.'});
   if (h3(bx + 101., by, uTick) < uAmt * uAmt * .06) {                      // a few blocks copied from elsewhere
-    vec2 from = fc + (vec2(h3(bx, by, uTick + 7.), h3(by, bx, uTick + 9.)) - .5) * vec2(480., 160.);
+    vec2 from = fc + (vec2(h3(bx, by, uTick + 7.), h3(by, bx, uTick + 9.)) - .5) * vec2(480., 160.)${SC ? ' * uK' : ''};
     c = texture(uSrc, from * px).rgb;
   }
   o = vec4(c, 1.);
@@ -332,12 +341,17 @@ void main() {
 
 // ---------------------------------------------------------------- GL plumbing
 let GLC = null, gl = null, FMT = null;
+// Output pixels: the light buffer, its depth and the bloom levels are W·k × H·k (k = MV.scale, engine/core.js);
+// every size a scene passes (point size, line width, blur, dof, glow radius, cam.project) stays in design px.
+let K = 1, PW = 0, PH = 0, BO = 0;   // BO: bloom levels skipped at the fine end, so the glow keeps its radius at 4K
 const PR = {}, VAO = {};
 let LIGHT = null, LEVELS = [], GLOW = null, GLOWX = null, TEX = {}, SCR = null;
 const BEGIN = [];      // lmOnBegin hooks (kits/solid.js resets its per-frame state there)
 function glInit() {
   if (gl) return;
-  GLC = document.createElement('canvas'); GLC.width = W; GLC.height = H;
+  K = MV.scale || 1; PW = Math.round(W * K); PH = Math.round(H * K); BO = Math.max(0, Math.round(Math.log2(K)));
+  GLC = document.createElement('canvas'); GLC.width = PW; GLC.height = PH;
+  if (K !== 1) GLC.__k = K;                                     // drawImage(GLC, 0, 0) on a scaled layer fits W × H
   gl = GLC.getContext('webgl2', { preserveDrawingBuffer: true, premultipliedAlpha: false, antialias: false, alpha: false, depth: false, stencil: false });
   if (!gl) throw new Error('lumen.js needs WebGL2');
   const fl = gl.getExtension('EXT_color_buffer_float') || gl.getExtension('EXT_color_buffer_half_float');
@@ -351,9 +365,9 @@ function glInit() {
   }
   gl.bindVertexArray(null);
   SCR = gl.createBuffer();
-  LIGHT = target(W, H);
-  for (let i = 1, w = W, h = H; i <= 7; i++) { w = Math.max(1, w >> 1); h = Math.max(1, h >> 1); LEVELS.push(target(w, h)); }
-  GLOW = mk(W, H); GLOWX = GLOW.getContext('2d');
+  LIGHT = target(PW, PH);
+  for (let i = 1, w = PW, h = PH; i <= 7 + BO; i++) { w = Math.max(1, w >> 1); h = Math.max(1, h >> 1); LEVELS.push(target(w, h)); }
+  GLOW = mkHi(W, H); GLOWX = GLOW.getContext('2d');
 }
 function target(w, h) {
   const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
@@ -413,7 +427,7 @@ function lmDepth() {
   glInit();
   if (!LIGHT.depth) {
     const rb = gl.createRenderbuffer(); gl.bindRenderbuffer(gl.RENDERBUFFER, rb);
-    gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, W, H);
+    gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, PW, PH);
     gl.bindFramebuffer(gl.FRAMEBUFFER, LIGHT.fb); gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, rb);
     gl.clearDepth(1); gl.clear(gl.DEPTH_BUFFER_BIT);
     LIGHT.depth = rb;
@@ -431,7 +445,7 @@ function occludeOn(u, o) {
 function occludeOff() { gl.disable(gl.DEPTH_TEST); gl.depthMask(true); gl.depthFunc(gl.LESS); }
 function camUniforms(u, cam, o) {
   gl.uniformMatrix4fv(u.uVP, false, cam.vp); gl.uniformMatrix4fv(u.uM, false, lmModel(o.model));
-  gl.uniform2f(u.uRes, W, H);
+  gl.uniform2f(u.uRes, W, H); gl.uniform1f(u.uK, K);
   gl.uniform1f(u.uNear, cam.near); gl.uniform1f(u.uFocus, o.focus ?? cam.focus);
   gl.uniform1f(u.uDof, o.dof || 0); gl.uniform1f(u.uBlur, o.blur || 0);
 }
@@ -445,7 +459,7 @@ function lmBegin(pal = 'ice', over) {
   const base = typeof pal === 'string' ? LUMEN[pal] || LUMEN.ice : { ...LUMEN.ice, ...pal };
   S.pal = over ? { ...base, ...over } : base;
   S.glowUsed = false;
-  gl.bindFramebuffer(gl.FRAMEBUFFER, LIGHT.fb); gl.viewport(0, 0, W, H);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, LIGHT.fb); gl.viewport(0, 0, PW, PH);
   gl.clearColor(0, 0, 0, 1); gl.clearDepth(1); gl.clear(gl.COLOR_BUFFER_BIT | (LIGHT.depth ? gl.DEPTH_BUFFER_BIT : 0));
   for (const fn of BEGIN) fn(S.pal);
   return S.pal;
@@ -460,7 +474,7 @@ function lmPoints(cam, P, o = {}) {
   if (!n) return;
   const pr = program('pts', VS_PTS, FS_PTS), u = pr.u;
   gl.useProgram(pr.p); gl.bindVertexArray(VAO.pts);
-  gl.bindFramebuffer(gl.FRAMEBUFFER, LIGHT.fb); gl.viewport(0, 0, W, H);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, LIGHT.fb); gl.viewport(0, 0, PW, PH);
   gl.enable(gl.BLEND); gl.blendEquation(gl.FUNC_ADD); gl.blendFunc(gl.ONE, gl.ONE);
   bufFor(P, o.dynamic, 0); attrib(1, 3, 12, 0, 1);
   if (o.colors) { bufFor(f32(o.colors), o.dynamic, 1); attrib(2, 3, 12, 0, 1); }
@@ -484,7 +498,7 @@ function lmLines(cam, Sg, o = {}) {
   let n = Sg.length / 8 | 0;
   const pr = program('lin', VS_LIN, FS_LIN), u = pr.u;
   gl.useProgram(pr.p); gl.bindVertexArray(VAO.lin);
-  gl.bindFramebuffer(gl.FRAMEBUFFER, LIGHT.fb); gl.viewport(0, 0, W, H);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, LIGHT.fb); gl.viewport(0, 0, PW, PH);
   gl.enable(gl.BLEND); gl.blendEquation(gl.FUNC_ADD); gl.blendFunc(gl.ONE, gl.ONE);
   if (o.upto != null && o.upto < 1) {
     const k = clamp(o.upto) * n, m = Math.floor(k), fr = k - m;
@@ -524,15 +538,15 @@ function lmEnd(g, o = {}) {
   if (S.glowUsed) {
     upload('glow', 0, GLOW);
     const pr = program('add', VS_FULL, FS_ADD); gl.useProgram(pr.p);
-    gl.uniform1i(pr.u.uTex, 0); gl.uniform2f(pr.u.uRes, W, H); gl.uniform1f(pr.u.uGain, o.glowGain ?? 1); gl.uniform1f(pr.u.uInk, ink ? 1 : 0);
-    gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE); fullscreen(LIGHT.fb, W, H); gl.disable(gl.BLEND);
+    gl.uniform1i(pr.u.uTex, 0); gl.uniform2f(pr.u.uRes, PW, PH); gl.uniform1f(pr.u.uGain, o.glowGain ?? 1); gl.uniform1f(pr.u.uInk, ink ? 1 : 0);
+    gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE); fullscreen(LIGHT.fb, PW, PH); gl.disable(gl.BLEND);
   }
-  const bloom = o.bloom ?? p.bloom, levels = clamp(Math.round(o.levels ?? 6), 1, LEVELS.length);
+  const bloom = o.bloom ?? p.bloom, levels = clamp(Math.round(o.levels ?? 6), 1, LEVELS.length - BO);
   let bk = 0;
   if (bloom > 0) {
     const pd = program('down', VS_FULL, FS_DOWN); gl.useProgram(pd.p); gl.uniform1i(pd.u.uSrc, 0);
     let src = LIGHT;
-    for (let i = 0; i < levels; i++) {
+    for (let i = 0; i < levels + BO; i++) {
       const dst = LEVELS[i]; bindTex(0, src.t);
       gl.uniform2f(pd.u.uSrcRes, src.w, src.h); gl.uniform2f(pd.u.uDstRes, dst.w, dst.h); gl.uniform1f(pd.u.uClamp, i === 0 ? 12 : 1e4);
       fullscreen(dst.fb, dst.w, dst.h); src = dst;
@@ -540,7 +554,7 @@ function lmEnd(g, o = {}) {
     const wgt = 0.55 + 0.9 * clamp(o.radius ?? p.radius), pu = program('up', VS_FULL, FS_UP);
     gl.useProgram(pu.p); gl.uniform1i(pu.u.uSrc, 0); gl.uniform1f(pu.u.uW, wgt);
     gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
-    for (let i = levels - 1; i > 0; i--) {
+    for (let i = levels + BO - 1; i > BO; i--) {
       const s = LEVELS[i], d = LEVELS[i - 1]; bindTex(0, s.t);
       gl.uniform2f(pu.u.uSrcRes, s.w, s.h); gl.uniform2f(pu.u.uDstRes, d.w, d.h); fullscreen(d.fb, d.w, d.h);
     }
@@ -549,14 +563,14 @@ function lmEnd(g, o = {}) {
     bk = bloom / tot;
   }
   const pc = program('comp', VS_FULL, FS_COMP), u = pc.u; gl.useProgram(pc.p);
-  bindTex(0, LIGHT.t); bindTex(1, bloom > 0 ? LEVELS[0].t : LIGHT.t);
-  gl.uniform1i(u.uLight, 0); gl.uniform1i(u.uBloom, 1); gl.uniform2f(u.uRes, W, H);
+  bindTex(0, LIGHT.t); bindTex(1, bloom > 0 ? LEVELS[BO].t : LIGHT.t);
+  gl.uniform1i(u.uLight, 0); gl.uniform1i(u.uBloom, 1); gl.uniform2f(u.uRes, PW, PH);
   const screen = o.blend === 'screen' || o.blend === 'lighter';
   const bg = screen ? [0, 0, 0] : rgb(o.bg ?? p.bg), bg2 = screen ? [0, 0, 0] : rgb(o.bg2 ?? p.bg2);
   gl.uniform3fv(u.uBg, bg); gl.uniform3fv(u.uBg2, bg2);
   gl.uniform1f(u.uMode, ink ? 1 : 0); gl.uniform1f(u.uBloomK, bk); gl.uniform1f(u.uExp, o.exposure ?? p.exposure);
   gl.uniform1f(u.uCA, o.ca ?? p.ca); gl.uniform1f(u.uLens, screen ? 0 : o.lens ?? p.lens); gl.uniform1f(u.uSeed, (o.seed ?? 0) + 1);
-  fullscreen(null, W, H);
+  fullscreen(null, PW, PH);
   g.save(); g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = o.alpha ?? 1;
   if (o.blend) g.globalCompositeOperation = o.blend;
   g.drawImage(GLC, 0, 0); g.restore();
@@ -568,6 +582,7 @@ function glitchPass(src, amt, tk) {
   upload('frame', 0, src);
   const pr = program('glitch', VS_FULL, FS_GLITCH); gl.useProgram(pr.p);
   gl.uniform1i(pr.u.uSrc, 0); gl.uniform2f(pr.u.uRes, src.width, src.height); gl.uniform1f(pr.u.uAmt, clamp(amt)); gl.uniform1f(pr.u.uTick, tk % 100000);
+  gl.uniform1f(pr.u.uK, src.__k || 1);
   if (GLC.width !== src.width || GLC.height !== src.height) { GLC.width = src.width; GLC.height = src.height; }
   fullscreen(null, src.width, src.height);
   const g = src.getContext('2d');
@@ -1069,7 +1084,7 @@ function lmCodeBg(g, src, o = {}) {
 /** For kits that draw into the same light buffer before the bloom (kits/solid.js). Not a scene API. */
 function lmGL() {
   glInit();
-  return { gl, W, H, light: LIGHT, fmt: FMT, program, fullscreen, target, bindTex, bufFor, attrib, camUniforms, rgb, emit, lmDepth,
+  return { gl, W, H, PW, PH, K, light: LIGHT, fmt: FMT, program, fullscreen, target, bindTex, bufFor, attrib, camUniforms, rgb, emit, lmDepth,
     pal: () => S.pal, VAO, HASH, VS_FULL };
 }
 function lmOnBegin(fn) { BEGIN.push(fn); }

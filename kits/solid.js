@@ -159,9 +159,9 @@ lmOnBegin(() => { depthDirty = true; });
 function init() {
   if (L) return;
   L = lmGL(); gl = L.gl; L.lmDepth();
-  const W = L.W, H = L.H;
+  const W = L.PW, H = L.PH;                 // output pixels (design W × H × MV.scale); 2× MSAA at 4K is as fine as 4× at 1080p
   let samples = 0;
-  try { const s = gl.getInternalformatParameter(gl.RENDERBUFFER, L.fmt.i, gl.SAMPLES); samples = s && s.length ? Math.min(4, s[0]) : 0; } catch (e) { samples = 0; }
+  try { const s = gl.getInternalformatParameter(gl.RENDERBUFFER, L.fmt.i, gl.SAMPLES); samples = s && s.length ? Math.min(L.K >= 2 ? 2 : 4, s[0]) : 0; } catch (e) { samples = 0; }
   const make = n => {
     const fb = gl.createFramebuffer(), cr = gl.createRenderbuffer(), dr = gl.createRenderbuffer();
     gl.bindRenderbuffer(gl.RENDERBUFFER, cr);
@@ -234,7 +234,7 @@ const MODES = { lit: 0, glass: 1, xray: 2, emit: 2, depth: 3 };
  */
 function smMesh(cam, mesh, o = {}) {
   init();
-  const mode = MODES[o.mat || 'lit'] ?? 0, W = L.W, H = L.H, pal = L.pal(), ink = pal.mode === 'ink';
+  const mode = MODES[o.mat || 'lit'] ?? 0, W = L.PW, H = L.PH, K = L.K, pal = L.pal(), ink = pal.mode === 'ink';   // W, H: output px here
   const ent = meshVAO(mesh);
   let count = ent.count;
   if (o.upto != null) count = Math.floor(Math.max(0, Math.min(1, o.upto)) * count / 3) * 3;
@@ -260,9 +260,10 @@ function smMesh(cam, mesh, o = {}) {
     gl.uniform1f(u.uSpec, o.spec ?? 0.8); gl.uniform1f(u.uShine, o.shine ?? 48); gl.uniform1f(u.uRim, o.rim ?? 0.6); gl.uniform1f(u.uRimP, o.rimPow ?? 2.5);
     gl.uniform1f(u.uEnv, o.env ?? 0.6); gl.uniform1f(u.uGain, o.gain ?? 1); gl.uniform1f(u.uInk, ink ? 1 : 0); gl.uniform1f(u.uTwo, o.twoSided ? 1 : 0);
     gl.uniform1f(u.uFog, o.fog || 0);
-    gl.uniform1f(u.uRefr, (o.refract ?? 38) * ((o.ior ?? 1.45) - 1) / 0.45); gl.uniform1f(u.uDisp, o.dispersion ?? 0.06);
-    gl.uniform1f(u.uTintK, o.tintK ?? 0.35); gl.uniform1f(u.uGlow, o.glow ?? 0.25); gl.uniform1f(u.uRough, o.rough || 0);
-    if (b) { const ax = norm3(b.axis || [0, 1, 0]); gl.uniform4f(u.uBand, ax[0], ax[1], ax[2], b.step || 0.1); gl.uniform2f(u.uBandW, b.width ?? 1.2, b.gain ?? 0.6); }
+    // px options are design px: × K for the output pixels the shader works in
+    gl.uniform1f(u.uRefr, (o.refract ?? 38) * ((o.ior ?? 1.45) - 1) / 0.45 * K); gl.uniform1f(u.uDisp, o.dispersion ?? 0.06);
+    gl.uniform1f(u.uTintK, o.tintK ?? 0.35); gl.uniform1f(u.uGlow, o.glow ?? 0.25); gl.uniform1f(u.uRough, (o.rough || 0) * K);
+    if (b) { const ax = norm3(b.axis || [0, 1, 0]); gl.uniform4f(u.uBand, ax[0], ax[1], ax[2], b.step || 0.1); gl.uniform2f(u.uBandW, (b.width ?? 1.2) * K, b.gain ?? 0.6); }
     else gl.uniform4f(u.uBand, 0, 1, 0, 0);
     gl.uniform2f(u.uRes, W, H); gl.uniformMatrix4fv(u.uV, false, cam.view);
     if (mode === 1) { L.bindTex(1, L.light.t); gl.uniform1i(u.uBack, 1); }
@@ -285,10 +286,10 @@ function smMesh(cam, mesh, o = {}) {
 }
 function compose(src, blend) {
   const pc = L.program('sm-compose', L.VS_FULL, FS_COMPOSE);
-  gl.useProgram(pc.p); L.bindTex(0, src.t); gl.uniform1i(pc.u.uSrc, 0); gl.uniform2f(pc.u.uRes, L.W, L.H);
+  gl.useProgram(pc.p); L.bindTex(0, src.t); gl.uniform1i(pc.u.uSrc, 0); gl.uniform2f(pc.u.uRes, L.PW, L.PH);
   gl.enable(gl.BLEND); gl.blendEquation(gl.FUNC_ADD);
   if (blend === 'add') gl.blendFunc(gl.ONE, gl.ONE); else gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-  L.fullscreen(L.light.fb, L.W, L.H); gl.disable(gl.BLEND);
+  L.fullscreen(L.light.fb, L.PW, L.PH); gl.disable(gl.BLEND);
 }
 
 /**
@@ -324,12 +325,12 @@ function setUniform(u, k, v) {
  */
 function smShader(name, src, o = {}) {
   init();
-  const W = L.W, H = L.H, res = Math.max(0.1, Math.min(1, o.res ?? 1)), depth = !!o.depth && res >= 1, pal = L.pal();
+  const W = L.W, H = L.H, PW = L.PW, PH = L.PH, res = Math.max(0.1, Math.min(1, o.res ?? 1)), depth = !!o.depth && res >= 1, pal = L.pal();
   const fs = `#version 300 es\nprecision highp float;\n${depth ? '#define SM_DEPTH 1\n' : ''}${SM_GLSL}\n${src}\nout vec4 smOut_;\nvoid main() {\n  vec2 px = vec2(gl_FragCoord.x, uTgt.y - gl_FragCoord.y) * (uRes / uTgt);\n  vec4 c = shade(px);\n  smOut_ = vec4(max(c.rgb, 0.) * c.a, c.a);\n#ifdef SM_DEPTH\n  gl_FragDepth = sm_depth;\n#endif\n}`;
   const pr = L.program('sm:' + name + (depth ? '#d' : ''), L.VS_FULL, fs), u = pr.u;
-  let tgt = null, tw = W, th = H;
+  let tgt = null, tw = PW, th = PH;                               // px = design px; the target is output px (× res)
   if (res < 1) {
-    tw = Math.max(1, Math.round(W * res)); th = Math.max(1, Math.round(H * res));
+    tw = Math.max(1, Math.round(PW * res)); th = Math.max(1, Math.round(PH * res));
     const key = tw + 'x' + th; tgt = LOWRES[key] || (LOWRES[key] = L.target(tw, th));
     gl.bindFramebuffer(gl.FRAMEBUFFER, tgt.fb); gl.viewport(0, 0, tw, th); gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
   }
@@ -346,7 +347,7 @@ function smShader(name, src, o = {}) {
   gl.enable(gl.BLEND); gl.blendEquation(gl.FUNC_ADD);
   if ((o.blend || 'add') === 'add') gl.blendFunc(gl.ONE, gl.ONE); else gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
   if (depth) { gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.depthMask(true); }
-  L.fullscreen(L.light.fb, W, H);
+  L.fullscreen(L.light.fb, PW, PH);
   gl.disable(gl.BLEND); gl.disable(gl.DEPTH_TEST); gl.depthFunc(gl.LESS);
 }
 

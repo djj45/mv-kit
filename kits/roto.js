@@ -173,7 +173,10 @@ void main(){
 let S = null; // GL state, built on first use (W / H are only known after MV.setup)
 function glState() {
   if (S) return S;
-  const cv = mk(W, H);
+  // the passes run at output pixels (W × H × MV.scale); every px / res uniform stays in design px, so the flats, the
+  // DoG lines, the screentone cells and the paper are the same size at 1080p and 4K, just sharper
+  const PW = Math.round(W * MV.scale), PH = Math.round(H * MV.scale), cv = mk(PW, PH);
+  if (MV.scale !== 1) cv.__k = MV.scale;
   const gl = cv.getContext('webgl2', { premultipliedAlpha: false, preserveDrawingBuffer: true, antialias: false });
   if (!gl) throw new Error('roto.js needs WebGL2');
   const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
@@ -192,10 +195,10 @@ function glState() {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE); return t; };
   const fbo = t => { const f = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, f); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0); return f; };
-  const T = [0, 1, 2, 3].map(() => tex(W, H)), F = T.map(fbo);
+  const T = [0, 1, 2, 3].map(() => tex(PW, PH)), F = T.map(fbo);
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-  S = { cv, gl, T, F, src: tex(), pressTex: tex(), cam: prog(FS_CAM), flat: prog(FS_FLAT), blur: prog(FS_BLUR), cel: prog(FS_CEL), press: prog(FS_PRESS), pals: new Map() };
+  S = { cv, gl, T, F, PW, PH, src: tex(), pressTex: tex(), cam: prog(FS_CAM), flat: prog(FS_FLAT), blur: prog(FS_BLUR), cel: prog(FS_CEL), press: prog(FS_PRESS), pals: new Map() };
   return S;
 }
 function palArray(pal) {
@@ -217,7 +220,7 @@ function rotoCel(src, o = {}) {
   if (!pal) throw new Error(`roto: unknown palette "${o.pal}"`);
   const sw = src.naturalWidth || src.videoWidth || src.width, sh = src.naturalHeight || src.videoHeight || src.height;
   const cam = o.cam || {};
-  gl.viewport(0, 0, W, H);
+  gl.viewport(0, 0, s.PW, s.PH);
   gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, s.src);
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src);
   // camera
@@ -256,7 +259,7 @@ function rotoDraw(g, src, o = {}) {
 MV.postFilter((canvas, post, t) => {
   const p = post.press; if (!p) return;
   const o = p === true ? {} : p, s = glState(), gl = s.gl;
-  gl.viewport(0, 0, W, H); gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, s.PW, s.PH); gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, s.pressTex);
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
   const P = s.press; P.use(); gl.uniform1i(P.u('s'), 0);

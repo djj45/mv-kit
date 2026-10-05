@@ -16,6 +16,7 @@
 
 - 确定性：一帧只由 `f.t` 决定。禁止 `Math.random / Date.now / performance.now`；用 `hash / mulberry32 / noise1`。不在 `render` 里累积状态；写不成时间函数的模拟用 `kits/sim.js` 的 `SIM.make`（固定步长从镜头开头算到 t，带检查点），不要自己在 render 里一帧帧往前推。
 - lumen 画面里要有受光的面（玻璃、金属、分子球棍、立体字）或光线步进的结构时，用 `kits/solid.js`（`smMesh / smGlass / smShader`，见 `docs/ENGINE.md`「solid.js」），画进 lumen 的同一块光里，不要另开一个 WebGL 画布再贴上去（那样拿不到 lumen 的泛光和深度，点云也躲不到实体后面）。
+- 分辨率（新项目都要能 `--4k` 导出）：场景永远在设计尺寸 `W × H`（1920 × 1080）里画，不读 `g.canvas.width`。全幅或要上屏的离屏图层用 `mkHi(w, h)`，不要 `mk(W, H)`；`mk` 只给取像素的分析、纹理和故意低分辨率的软模糊。`getImageData / putImageData / canvas.width` 是真实像素（4K 下是 2 倍），要设计尺寸用 `MV.sizeOf(c)`、`MV.fits(c, w, h)`。写新风格包的 WebGL 时，画布按 `W·MV.scale` 建、着色器里的 px 量按设计像素算（见 `docs/ENGINE.md`「分辨率」）。做完一个镜头出一张 `stills --t … --4k`，放大看字和细线是不是锐的、大小位置和 1080p 一样。
 - 静态的画（背景、贴图）在 `MV.onInit` 或场景 `init()` 里画一次。
 - 手绘感：角色动作和线条抖动用 `f.tq` / `f.tick`（按 `drawRate` 定格），镜头运动用连续的 `f.t`。
 - 颜料 / 纸感用 `kits/pigment.js`：往 `L.wet / L.dry / L.col` 画浓度再 `pigmentDraw`，不要在 Canvas 2D 里用大面积 `filter: blur()` 模拟晕染。纸要按镜头的世界坐标传 `offset`，免得平移时纸纹游动。
@@ -61,6 +62,7 @@ uv run tools/render.py projects/X strip --t 40.2 --dur 1.2   # 关键动作每 0
 uv run tools/render.py projects/X --from 30 --to 40 --preset veryfast   # 快速看一段动态
 uv run tools/render.py projects/X model            # 角色定型图（MV.model）→ out/model-<名字>.png
 uv run tools/render.py projects/X                  # 最终导出（按块并行 --workers N；中断后再跑接着渲；--fresh 全部重渲、--clean 导完删块；--png 无损传帧）
+uv run tools/render.py projects/X --4k             # 原生 4K 导出（stills / sheet / strip 也可以加 --4k）
 uv run tools/tune_lyrics.py projects/X             # 歌词校准工具（频谱 + 逐字竖线，保存到 data/lyrics_fix.json）
 uv run tools/lyric_timing.py merge projects/X      # 新 clone / 换电脑：用本机 lyrics.txt + data/timing.json 还原歌词数据和校准
 uv run tools/dreamina.py projects/X doctor          # 即梦画布 CLI：版本、schema、实时模型表 → art/dreamina/（生成图片和视频都用它，用户在 Mac 上跑）

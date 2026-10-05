@@ -79,7 +79,7 @@ const hex = h => { const n = parseInt(h.replace('#', ''), 16); return [(n >> 16)
 /** Grade + highlight diffusion, painted once. Returns a canvas (≤ o.w wide). */
 function illPrep(src, o = {}) {
   const sw = src.naturalWidth || src.width, sh = src.naturalHeight || src.height;
-  const s = Math.min(1, (o.w || 2560) / sw), w = Math.round(sw * s), h = Math.round(sh * s);
+  const s = Math.min(1, (o.w || Math.max(2560, 1920 * (MV.scale || 1))) / sw), w = Math.round(sw * s), h = Math.round(sh * s);   // 4K keeps 3840 px of the art
   const c = mk(w, h), g = c.getContext('2d');
   g.drawImage(src, 0, 0, w, h);
   const gr = o.grade;
