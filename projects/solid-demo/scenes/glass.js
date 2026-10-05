@@ -30,14 +30,17 @@ MV.scene('glass', {
   beat(f) {                                                 // lub-dub on every beat, a harder one on the bar
     const bt = 60 / (f.audio.bpm || 120), since = f.beatPhase * bt, bar = Math.floor(f.beat) % 4 === 0 ? 1.6 : 1;
     const p = u => (u < 0 ? 0 : Math.exp(-u * 13));
-    return (p(since) + 0.55 * p(since - 0.19)) * bar;
+    return (p(since) + 0.55 * p(since - 0.19)) * (bar > 1 ? 2.2 : 0.6);
   },
   render(g, f) {
     const t = f.t, lt = f.lt;
-    const cam = lmOrbit({ yaw: 0.18 + lt * 0.035, pitch: 0.1, dist: 5.4, fov: 34, shift: [270, -6] });
-    const b = this.beat(f), s = 0.8 * (1 + 0.055 * b);
+    // still between events: the heart turns (with an overshoot) and the camera eases round on the bars (2 s, 4 s); a
+    // camera that drifts all the time moves every one of the wall's ten thousand dots and nothing ever holds
+    const turn = te => ease.outBack(clamp((lt - te) / 0.5)), ease2 = te => ease.inOutCubic(clamp((lt - te) / 0.6));
+    const cam = lmOrbit({ yaw: 0.16 + 0.05 * (ease2(2) + ease2(4)), pitch: 0.1, dist: 5.4 - 0.12 * (ease2(2) + ease2(4)), fov: 34, shift: [270, -6] });
+    const b = this.beat(f), s = 0.8 * (1 + 0.04 * b);
     const ign = ease.outCubic(prog(lt, 1.22, 1.6));                      // the nucleus lights on "inside" (1.25 s)
-    const model = { rot: [0.06 * Math.sin(lt * 0.5), Math.sin(lt * 0.4) * 0.45 - 0.15, 0], scale: [s * (1 - 0.012 * b), s * (1 + 0.025 * b), s * (1 - 0.012 * b)] };
+    const model = { rot: [0.05 - 0.08 * turn(4), -0.4 + 0.5 * turn(2) + 0.45 * turn(4), 0], scale: [s * (1 - 0.012 * b), s * (1 + 0.025 * b), s * (1 - 0.012 * b)] };
     const ringM = { rot: [1.15 + 0.05 * Math.sin(lt * 0.4), lt * 0.35, 0.32] };
     const shock = Math.exp(-Math.max(0, lt - 4) * 3.5) * (lt >= 4 ? 1 : 0);    // the hard beat on the bar: the glass flexes, colours split
     const pal = lmBegin('rose');
