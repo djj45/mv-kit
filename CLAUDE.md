@@ -5,11 +5,12 @@
 ## 工作流程（按顺序，不跳步）
 
 1. **项目与数据**：`tools/new_project.py` 新建 → `analysis/analyze_audio.py` → `analysis/align_lyrics.py`。看输出里的 BPM、小节相位分数、段落和低置信度词表；有疑问就让用户在预览里按 `d` 核对，或自己用 `render.py stills` 截图看调试层以外的画面。
-2. **方案先行**：先按 `template/TREATMENT.md` 写好项目的 `TREATMENT.md`（概念、画风、调色板、字体、母题、镜头表），给用户看，确认后再写代码。风格要具体到能照着画：线条、阴影层数、配色、质感、作画张数、镜头语言。
-3. **时间线**：`timeline.js` 用 `cut / after / start` 按歌词内容和节拍算切点，不手写秒数。
+2. **方案先行**：先按 `template/TREATMENT.md` 写好项目的 `TREATMENT.md`（概念、画风、调色板、字体、母题、角色、镜头表），给用户看，确认后再写代码。风格要具体到能照着画：线条、阴影层数、配色、质感、作画张数、镜头语言。镜头表每一行都要有**事件**（首帧到尾帧变了什么）和 **reads**（观众依次要看懂什么）。
+   有角色时，先写角色的 lib（用 `kits/act.js` 的姿态驱动）并用 `MV.model` 登记定型图，`render.py projects/<项目> model` 出图、用 Read 打开亲自看（各视角头顶和眼线对齐、表情读得出来），给用户看过再写镜头。
+3. **时间线**：`timeline.js` 用 `cut / after / start / word` 按歌词内容和节拍算切点，不手写秒数。每个条目写 `reads`（镜头表那一列）：`check` 报 `read` 的地方先改好（加长镜头、往后挪下一条、删掉一条）。
 4. **镜头**：一个镜头一个 `scenes/<名字>.js`；多个镜头共用的角色、背景、道具放 `lib/`（在 `project.scripts` 里列出）；能跨项目复用的画风工具放 `kits/`。项目默认带 `kits/camera.js` 和 `kits/layout.js`（用法见 `docs/ENGINE.md`「风格包」，每种用法在 `projects/kit-demo` 里有一处范例）。
-5. **每改一个镜头就看图、跑 qa**：`uv run tools/render.py projects/<项目> sheet --cuts`（或 `stills --t …`），用 Read 工具**打开 PNG 亲自检查**构图、衔接；然后 `render.py projects/<项目> qa --from <镜头起> --to <镜头止>`，打开它给的局部截图，**错误清零再做下一个镜头**。拼板看不出几个像素的出框和被裁掉一半的字，那些以 qa 为准。
-6. **导出**：先 `check` 确认没有场景报错并处理时间线 / 歌词提示，再整片跑 `qa`：**没有错误才算做完**，警告逐条处理，保留的在 TREATMENT 里写理由。然后 `uv run tools/render.py projects/<项目>`。提示歌曲文件不是分析时那一份时，先弄清楚再导出。
+5. **每改一个镜头就看图、跑 qa**：`uv run tools/render.py projects/<项目> sheet --cuts`（或 `stills --t …`），用 Read 工具**打开 PNG 亲自检查**构图、衔接；每个关键动作（起跳、转身、情绪变化、转场）出一张 `strip --step 0.083` 逐帧看预备、跟随和有没有跳帧；然后 `render.py projects/<项目> qa --from <镜头起> --to <镜头止>`，打开它给的局部截图，**错误清零再做下一个镜头**。拼板看不出几个像素的出框和被裁掉一半的字，那些以 qa 为准。
+6. **导出**：先 `check` 确认没有场景报错并处理时间线 / 歌词提示，再整片跑 `qa`：**没有错误才算做完**，警告逐条处理，保留的在 TREATMENT 里写理由。然后 `uv run tools/render.py projects/<项目>`。提示歌曲文件不是分析时那一份时，先弄清楚再导出。导出按块渲染并留在 `out/.chunks/`：中断了再跑同一条命令就接着渲，改了一个镜头再导出只重渲那几块。
 
 ## 代码规则
 
@@ -30,6 +31,15 @@
 - 转场默认硬切。要转场就得有东西跨过切点：推进 / 拉出同一个物体用 `zoom`（场景写 `anchors(f)`），同一空间相邻的地方用 `pan`（右 = 往后，左 = 往前，下 = 更深），画面拆散重组用 `reflow`，风格包自己的遮罩（`ink`、`wash`……）也行。在 `timeline.js` 里给每个转场写一句注释说明理由；TREATMENT 的镜头表里也写。
 - 交叉淡化 / 转场：前一个条目延续到 `from + fadeIn`，否则淡化到一半会跳。要让转场落在拍上，用 `land(t, 秒数)` 算 `from`。
 - 大动作落在拍点上：切镜在小节头或唱到的音节，冲击落在 `f.a.kick / f.a.snare`。
+- **按观众看懂的时间排**（reads）：你知道发生了什么是因为代码是你写的；观众只看一遍、全速、第一次看。每条 read 要有时间让眼睛找到、看懂、记住，再开始下一条；一次一件——两件事同时发生，观众只看见一件。原因和反应排先后，不要叠在一起。快动作可以很快（有预备就看得清），意思要停住给时间：一个镜头里有快有停才有节奏，从头到尾一个速度（不管快慢）就是平的（qa 的 `one-speed`）。重要的 read 之前先把眼睛引过去（它动、它亮、它大、有人看它、镜头推过去），并在它开始时最后报它的 `MV.focus`（qa 的 `read-unled`）。
+- **角色表演**（`kits/act.js`，见 `docs/ENGINE.md`「act.js」，范例 `projects/act-demo`）：代码写的动作天然是机器的——所有部件同时动、同一条曲线、同样的幅度。所以：
+  - 预备：大动作之前先往反方向动一点（起跳前下蹲、扔之前后摆、吃惊前一缩）：`ACT.jump / ACT.take / ACT.antic`。
+  - 挤压拉伸（体积不变，`ACT.squash`）、缓入缓出（不要用不带缓动的 `lerp` 走时间）、重量（重的东西起停慢、落地不弹；轻的一下就动、弹、飘）、弧线（抛出的东西、跳、摆臂、转头走弧线：`ACT.arc`）。
+  - 跟随和错开：眼睛先动，身体跟上，手臂、帽子、道具、尾巴拖后、过冲、最后才停（`ACT.lag / ACT.spring / ACT.ring`）。**不要对称同步**：两只手不要同一个角度，一群角色不要整齐划一（`ACT.vary`）。
+  - 夸张：姿势、take、挤压、倾斜比"自然"更过一点——短片里含蓄等于没有。关键姿势停下来单看也要读得出（清楚的剪影、身体倾向它在做的事），中间的运动才有意义（`ACT.poses` 先摆关键姿势再连）。
+  - 表情从不硬切：用 `ACT.emotions` 演出来（眯眼预备 → 换脸 → take → 落定），不要在两帧之间直接换眼睛和嘴。先表现出"想"：注意到 → 想 → 行动，眼睛先动。
+  - 角色够大：中景时角色约占画面高度的三成，特写更大；广角的小角色只用来交代环境，不能整片都是。拿着的东西要碰到手（用 crop / stills 放大看）。转身用画好的关键视角（`ACT.turn`），不做三维投影。
+  - 每个镜头都要有事件：开头和结尾之间有东西变了。埋下的东西（一扇门、一个声音）要在这一镜或之后交代。
 - 全局名字冲突：多个 `<script>` 共享全局作用域，顶层 `const` / `let` 不能重名。项目内的顶层常量加前缀或放进函数 / 对象里。
 - `project.js` 等号后面必须是合法 JSON（Python 工具也读它）。
 
@@ -48,7 +58,8 @@ uv run tools/render.py projects/X sheet --cuts     # 每个镜头首 / 中 / 尾
 uv run tools/render.py projects/X stills --t 12.5,20
 uv run tools/render.py projects/X strip --t 40.2 --dur 1.2   # 关键动作每 0.2 s 一帧，一行排开 → out/strip-0040.20.png（按起点命名，不互相覆盖）
 uv run tools/render.py projects/X --from 30 --to 40 --preset veryfast   # 快速看一段动态
-uv run tools/render.py projects/X                  # 最终导出（并行 --workers N，默认按核数；--png 无损传帧）
+uv run tools/render.py projects/X model            # 角色定型图（MV.model）→ out/model-<名字>.png
+uv run tools/render.py projects/X                  # 最终导出（按块并行 --workers N；中断后再跑接着渲；--fresh 全部重渲、--clean 导完删块；--png 无损传帧）
 uv run tools/tune_lyrics.py projects/X             # 歌词校准工具（频谱 + 逐字竖线，保存到 data/lyrics_fix.json）
 uv run tools/lyric_timing.py merge projects/X      # 新 clone / 换电脑：用本机 lyrics.txt + data/timing.json 还原歌词数据和校准
 uv run tools/dreamina.py projects/X doctor          # 即梦画布 CLI：版本、schema、实时模型表 → art/dreamina/（生成图片和视频都用它，用户在 Mac 上跑）

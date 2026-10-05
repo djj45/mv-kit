@@ -87,11 +87,20 @@ MV.timeline(({ lyrics, audio, cut, after, start, T0, T1 }) => [
 - `cut(q, nth, { hold })`：第 nth 个包含 q 的歌词行，其第一个词开始之前的那一拍。`hold`（秒，默认 `project.cutHold`，没写就是 0）：上一句的最后一个字在旧镜头里至少要停这么久；那一拍离它太近时，切点改落在这一句的第一个词上（仍在歌上，不会切进下一句）。新项目的 `project.js` 默认 `"cutHold": 0.2`（30 fps 下 6 帧）。
 - `after(q, nth)`：这一行结束处最近的小节头。
 - `start(q, nth)`：这一行第一个词开始的时间。
+- `word(q, nth)`：第 nth 个唱到的词 q 本身开始的时间（整词：`word('drop')`、`word('AGI')`）。动作和 reads 落在某个词上时用它；`start` 给的是整句的开头。
 - `land(t, dur, pre = 0.7)`：一个 `dur` 秒的转场要"落"在 t 上时它的 `from`：七成动作在 t 之前，余下的在 t 之后收住（`from: land(cut('…'), 0.8), fadeIn: 0.8`）。
 - 条目首尾相接就是硬切；只有写了 `fadeIn` 且重叠时才交叉淡化。前一个条目要一直延续到 `from + fadeIn`，否则它一结束，淡化到一半的画面会跳成新镜头。
 - 转场：条目写 `fadeIn: 秒数, wipe: '名字'`，新镜头就按这个转场进来（代替交叉淡化），见下面的"转场"。
 - 同一个场景可以出现多次，用 `params` 区分。
-- `MV.lint()` 检查剪辑里单看一帧发现不了的问题，返回 `[{t, kind, msg}]`：`gap`（空档）、`hidden`（重叠但没有 `fadeIn`）、`fade`（淡化放不完或没有重叠）、`wipe`（未定义的转场、没写 `fadeIn` 的转场、转场自己的检查没通过，比如场景里没有那个锚点）、`repeat`（同场景同参数连着出现）、`offbeat`（切点不在拍上也不在唱到的字上，±1 帧；转场的开始、结束或 `land` 的落点在拍上也算；没有 audio.js 时不查）、`linetail`（句尾的字离下一句不到 `lineTail` 秒，默认 0.65）、`cuttail`（硬切离一句最后一个字的开始不到 `cutTail` 秒，默认 6 帧：那个字闪一下就没了；用 `cut(q, n, { hold })` 或 `project.cutHold`）。`render.py check` 打印它们，预览在镜头条上画红色短线。`project.lint = { lineTail, cutTail, off: ['offbeat', …] }` 调整。
+- **reads**（观众要看懂什么，按顺序）：条目上写 `reads: [[时间, '看懂什么', '眼睛该在的 MV.focus 名字'], …]`。每一条一直持续到下一条开始（或镜头交出去），所以天然一次只有一件事。时间用 `word / start / cut` 算，不写死秒数。第三项也可以是 `{ focus, quick: true }`：`quick` 表示一个**有预备动作铺垫**的快动作，可以短一些。
+  ```js
+  { scene: 'chase', from: cut('Your circuits'), to: cut('now I'),
+    reads: [[cut('Your circuits'), 'the spark zips off to the right', 'spark'],
+            [6.5, 'Pip trots after it, nervous', 'pip'],
+            [word('drop'), 'the spark drops off the edge', 'spark']] },
+  ```
+  `check` 查时间（`read`，见下）；`qa` 查眼睛：每条开始后两帧，这个镜头的主体（它最后报的 `MV.focus`）是不是这条写的名字（`read-unled`）。场景要在这条开始时把它变成主体——让它动、让它亮、让角色看它、让镜头推过去，并且最后报它的 `MV.focus`。预览按 `d` 时调试层显示当前这条 read。为什么：模型写的动画最常见的毛病是"所有东西一个速度、事件叠在一起、还没看懂就过去了"（Claude Animation Base 的 ANIMATION_GUIDE）；reads 是这件事的时间表。
+- `MV.lint()` 检查剪辑里单看一帧发现不了的问题，返回 `[{t, kind, msg}]`：`gap`（空档）、`hidden`（重叠但没有 `fadeIn`）、`fade`（淡化放不完或没有重叠）、`wipe`（未定义的转场、没写 `fadeIn` 的转场、转场自己的检查没通过，比如场景里没有那个锚点）、`repeat`（同场景同参数连着出现）、`offbeat`（切点不在拍上也不在唱到的字上，±1 帧；转场的开始、结束或 `land` 的落点在拍上也算；没有 audio.js 时不查）、`linetail`（句尾的字离下一句不到 `lineTail` 秒，默认 0.65）、`cuttail`（硬切离一句最后一个字的开始不到 `cutTail` 秒，默认 6 帧：那个字闪一下就没了；用 `cut(q, n, { hold })` 或 `project.cutHold`）、`read`（一条 read 离下一条或镜头交出去不到 `readMin` 秒（默认 0.6，`quick` 的用 `readQuick`，0.25）：观众看不过来；或者它落在自己的镜头外面；全片只要有一个条目写了 reads，1.5 秒以上却没写的镜头也会提示）。`render.py check` 打印它们，预览在镜头条上画红色短线。`project.lint = { lineTail, cutTail, readMin, readQuick, off: ['offbeat', …] }` 调整。
 
 ### 转场
 
@@ -176,7 +185,29 @@ MV.timeline(({ lyrics, audio, cut, after, start, T0, T1 }) => [
 - `BOX.panel(g, x, y, w, h, { fill, stroke, lw, pad, name })` + `BOX.lines(g, P, lines, { size, gap, font })`：面板和面板里一叠字，字号缩到四边都留够 `pad`。
 
 
-**anime.js**（日本 TV 动画赛璐璐风）：`paintCumulus`（硬边分色积云）、`drawLit`（角色单独成层 + 轮廓光）、`focusLines`（集中线）、`upLines`（速度线）、`sfx`（片假名音效字）、`titleText / lyricRow / bigWord / jpSub`（动画片头风格的歌词字和字幕）、常量 `FONT MONO INK`。配合 `drawRate: 12` 和 `post.grain ≈ 0.09`。
+**act.js**（表演：让代码画的角色像卡通一样动，而不是像机器）：项目里有角色就加进 `project.kits`。和画风无关：每个函数只返回数字（姿态），角色自己的绘制函数读它们，水墨、赛璐璐、皮影、剪纸都能用。改编自 Claude Animation Base（MIT，© 2026 John Heibel），节拍换成了歌曲真实的拍网格（`MV.audio`）。示例：`projects/act-demo`（原创角色 Pip，三个短镜头，每种用法一处）。
+
+姿态字段（角色的绘制函数读这些）：`dx dy`（以角色自己的单位 u 计，乘 u 用；dy < 0 向上）、`sq`（挤压：+ 压扁、− 拉长；用 `ACT.squash(sq)` 得到 `[sx, sy]`，以脚为中心缩放）、`rot`（以脚为轴的倾斜）、`aL aR`（手臂角：0 = 平伸，+ 向上，− 向下）、`lookX lookY`（−1..1）、`walk`（步相位）、`view`（画好的关键视角 `front / q / side / qback / back`）+ `flip`、`smear`（转身中间张的拖影）、`mood squint emote emoteK emoteAge`。几个姿态用展开合在一起；同一个字段（`dy`、`sq`）两边都动时用 `ACT.add(a, b, …)` **相加**，不要让后一个覆盖前一个。角色表演传 `f.tq`（按 drawRate 定格的时间），镜头运动传 `f.t`。
+
+- 动作：`ACT.jump(t, t0, t1, h)`（起跳前 0.12 s 下蹲预备、上升下落拉长、落地压扁回弹）、`ACT.take(t, t0, amt)`（吃惊的"一缩一抻"）、`ACT.antic(t, t0, dur)`（任何动作之前反方向的预备量：`x = lerp(x0, x1, …) − 30·ACT.antic(t, t0)`）、`ACT.spring(t, t0) / ACT.ring(t, [t0, t1…])`（事件之后的阻尼晃动：落定、帽子和标牌的跟随）、`ACT.arc(p0, p1, h, k)`（抛物线上的点）、`ACT.walk(t, t0, t1, x0, x1, stride)`（缓入缓出地走，带步相位和起伏）。
+- **停顿**：`ACT.poses(t, [[t0, 姿态0], [t1, 姿态1, 用时, 缓动], …])`：在 t1 之前**停在**姿态 0，然后用"用时"（默认 0.25 s，默认带过冲）快速到姿态 1 再停住。快动作、慢意思——和 `keys()`（整段时间都在匀速地动）相反。
+- 跟随与错开：`ACT.lag(fn, t, lag)`（尾随部件——帽子、耳朵、尾巴、头发——取主体 lag 秒之前的运动）、`ACT.vary(seed)`（群体里每个角色的拍相位、幅度、延迟都略有不同：一群人整齐划一看起来就是复制粘贴）。
+- 视角：`ACT.view(a)`、`ACT.turn(t, t0, t1, a0, a1)`（a 以圈计：0 正面、0.25 朝右、0.5 背面；0.12–0.25 s 内一张张换画好的视角，中间张带 `smear`）。**转身用画好的关键视角，不做三维投影。**
+- 情绪：`ACT.moods`（31 种，每种是一种**动法**——身体怎么跟着拍子活着动，加上 `take`（切进这种情绪时反应多大）和 `emote`；脸由角色自己按 `mood` 名字画）。`ACT.feel(name, t)` 是一种情绪在 t 时的样子；`ACT.emotions(t, [[t0, 'sleepy'], [t1, 'surprised'], …])` 是**演出来的**情绪变化：变化前眼睛挤上、身体压扁（预备）→ 在眯眼下换脸 → 按新情绪的大小来一下 take → 带过冲落进新的动法 → 新的 emote 弹出来。返回的 `squint` 是眼睛闭合度、`k` 是颜色从旧情绪过渡到新情绪的进度。**表情从不硬切。** 项目可以加自己的：`ACT.moods.smitten = { take: .7, body: (t, b) => ({ … }) }`。
+- 跳舞：`ACT.move(style, t, ACT.vary(i))`：`bounce hop roof sway wave walk run idle stomp shimmy spin mix`，锁在拍上。`ACT.beat(t)` 给出拍位置、拍内相位、每拍一次的起伏和冲击。
+
+**角色定型图（MV.model）**：一个角色在所有视角、情绪、关键姿态下画在一页上（动画公司的 model sheet），写镜头之前先给用户看、自己也对着它画，角色就不会走样。在角色的 lib 旁边登记：
+
+```js
+MV.model('pip', { cell: [300, 400], ground: 0.84, guides: [9.2 * U, 6.4 * U],   // 头顶、眼线：每个视角都要碰到这两条线
+  rows: [{ label: 'views', items: ['front', 'q', 'side', 'qback', 'back'].map(v => ({ label: v, pose: { view: v } })) },
+         { label: 'moods', items: ['neutral', 'happy', 'surprised'].map(m => ({ label: m, pose: t => ACT.feel(m, t) })) }],
+  draw(g, x, y, pose, t) { PIP.draw(g, x, y, U, pose, t); } });
+```
+
+`uv run tools/render.py projects/X model` → `out/model-<名字>.png`（`--name` 只出一个）；预览里打开 `index.html?model=<名字>`。`check` 会列出登记了哪些。用它查：各视角的头顶和眼睛是不是都在参考线上、侧面和背面是不是同一个角色、表情读不读得出来、手里的东西是不是碰到手。
+
+：`paintCumulus`（硬边分色积云）、`drawLit`（角色单独成层 + 轮廓光）、`focusLines`（集中线）、`upLines`（速度线）、`sfx`（片假名音效字）、`titleText / lyricRow / bigWord / jpSub`（动画片头风格的歌词字和字幕）、常量 `FONT MONO INK`。配合 `drawRate: 12` 和 `post.grain ≈ 0.09`。
 
 **ink.js**（水墨）：所有墨色都是同一种墨的不同浓度（`INK.A.qing / dan / zhong / nong / jiao`），纸纹透得出来。`paintXuan`（暖白宣纸）、`inkBloom / inkDrop`（墨滴落下、按落下后的时间晕开）、`inkStroke`（藏锋出锋 + 飞白笔毛，`upto` 可逐笔画出；见下）、`inkRidge`（山峦，带皴擦和点苔）、`inkRain`（三层斜雨，可避开歌词框）、`inkSoft`（低分辨率绘制再放大的柔边晕染，`grain` 让纸纹透出）、`inkLyrics / inkColumn`（竖排、从右往左、逐字洇出）、`inkLoadFont`，以及转场 `ink` / `wash`。配合 `drawRate: 12`、`post.grain ≈ 0.05`、`background` 设成纸色。
 
@@ -295,6 +326,8 @@ render(g, f) {
 | `text-cut` | 警告 | 一段字（标签、表格里的值、还挂着的歌词）在场景里离边 ≥ 96 px，被镜头的推近 / insert / shake 带出画面边一点点（切掉 5–50 %），而且镜头停在那儿：看着像出错。要么留整（`MV.keep`、往里挪），要么推到它整个出画。镜头还在动时的裁切、场景自己贴边放的字（图框的分区号）不报 |
 | `focus-out` | 错误 | `MV.focus` 报的主体跑出了画面（或离边不到 3 %） |
 | `static` | 警告 | 一个镜头（去掉歌词）从头到尾几乎不变，或有一半以上时间（≥ 1.5 s）定住不动 |
+| `one-speed` | 警告 | **有快有停**：2.5 秒以上的镜头（去掉歌词），每 1/6 秒量一次画面变了多少，最快的一刻不到最慢那一成的 3 倍（或者两者差不到画面的 2 %）：整段一个速度。要么只是在漂（什么也没发生），要么一直匀速冲（没有一刻突出、也没有一刻停下来让人看）。给它一个事件（落在拍上的冲击、转身、到达），对着一段较静的时间；或者把镜头剪短。从切入（`fadeIn`，至少 0.35 s）之后量到结束前 0.2 s。速度曲线写在 `out/qa/report.md` |
+| `read-unled` | 警告 | 一条带 focus 名字的 read（timeline 的 `reads`）开始时，这个镜头的主体（最后报的 `MV.focus`）不是它：眼睛不在这条 read 上。到这条开始时把它变成主体 |
 | `type-flat` / `type-band` | 警告 | 全片歌词字号差不多大（最大 / 最小 < 2.5 倍）；七成以上歌词挤在同一条横带里（像字幕）。只在整片跑 qa 时判；`--from / --to` 只打印这一段的数字 |
 
 输出：终端摘要、`out/qa/report.md`（含每个镜头的运动量表）、`out/qa/qa.json`，以及每条问题一张**局部放大的截图**（红框是字或主体，黄框是它该在的框）。有错误时退出码为 1。`--from / --to` 只查一段，改一个镜头时用它。`project.qa = { "margin": 96, "vis": 0.8, "motion": 0.02, "freeze": 0.005, "typeRange": 2.5, "off": ["lyric-edge"] }` 调阈值或关掉某一类。
@@ -307,4 +340,4 @@ render(g, f) {
 
 WebGL 要跑在 GPU 上才快：导出时 `render.py` 已经请求 GPU（macOS 上用 Metal；`MV_ANGLE` 环境变量可改），`render.py … check` 会打印 WebGL 用的是什么渲染器，写着 software / SwiftShader 就是软件渲染，pigment.js 会慢很多。
 
-导出：`render.py` 把帧分成 `--workers` 段（默认按 CPU 核数，最多 4），每段一个无头浏览器 + 一个 x264 并行渲染，最后无损拼接再合上歌。帧以 JPEG（质量 0.98）传出页面；`--png` 改成无损 PNG（每帧慢约 1.7 倍）。因为每一帧只由 t 决定，并行和逐帧渲染的结果一样。画面按 BT.709 矩阵转成 YUV，并在文件里标明 BT.709（原色、传输曲线、矩阵、tv 范围）。
+导出：`render.py` 把整片切成约 `--chunk` 秒（默认 4）一块，`--workers` 个无头浏览器 + x264（默认按 CPU 核数，最多 4）从队列里一块块取，重的段落（WebGL、帧包）不会拖住某一个 worker；最后无损拼接再合上歌。渲好的块留在 `out/.chunks/`，文件名由导出设置、帧区间和**它用到的文件的哈希**组成（共用的：engine、项目用到的 kits、project.js、index.html、lib、timeline.js、data、art、帧包……；加上这一块里出现的镜头各自的场景文件，以及这些场景文件用到全局名字的其他场景文件）。所以：导出中断（Ctrl-C、崩溃、合盖）后再运行同一条命令，从断的地方接着渲；改了一个镜头再导出，只重渲这个镜头所在的块（改了 lib、timeline、kit 就全部重渲）。出过场景错误的块这次照常拼进去，但不留。`--fresh` 全部重渲，`--clean` 导完删掉这些块。这依赖确定性：一帧只由 t 决定。帧以 JPEG（质量 0.98）传出页面；`--png` 改成无损 PNG（每帧慢约 1.7 倍）。因为每一帧只由 t 决定，并行和逐帧渲染的结果一样。画面按 BT.709 矩阵转成 YUV，并在文件里标明 BT.709（原色、传输曲线、矩阵、tv 范围）。

@@ -11,13 +11,14 @@
 mv-kit/
   engine/        渲染引擎（与风格无关）：数据 API、时间线、转场（推拉匹配 / 平移 / 颗粒重组）、后期、运动模糊、预览播放器
   kits/          camera.js（镜头语言：默认缓推、局部放大并跟随、二维转三维、主体不出画）和 layout.js（放进框里的字：表格、面板、自动缩字），每个项目默认带；
+                 act.js（角色表演：预备、挤压拉伸、过冲回弹、停顿、跟随、错开，演出来的情绪变化和锁拍的舞步；和画风无关，有角色的项目加上）；
                  风格工具包：anime.js（日本 TV 动画赛璐璐风）、ink.js（水墨）、pigment.js（WebGL 颜料合成层：宣纸 / 素胚 / 青花釉面）、qinghua.js（青花纹饰：勾线、分水、纹样、回转体瓶身、竖排歌词）、lumen.js（发光数据 / 终端科幻：WebGL 点云、光线、景深、泛光，终端歌词和 HUD）、roto.js（转描：把 AI 生成的视频 / 静帧重画成孔版印刷赛璐璐，WebGL）、print.js（行式打印机：画面按形状匹配成 ASCII 字符、叠打、绿条纹连续纸和色带油墨，WebGL）
   analysis/      音乐分析：analyze_audio.py（节拍 / 小节 / 段落 / 鼓点 / 包络）
                  align_lyrics.py（Whisper + 对齐 → 逐词时间），separate.py（可选，Demucs 分轨）
-  tools/         render.py（导出视频 / 截图 / 拼板 / 检查 / qa），qa.py（render.py qa：用真实渲染的帧量出唱到的词是否真的显示、字是否出框、主体是否出画、镜头动不动），new_project.py（新建项目），frames.py（把视频 / 静帧打包给 roto.js / illust.js），dreamina.py（用即梦画布 CLI 生成插画和图生视频片段），eyetrack.py（量帧包里眼睛每张画的开合和瞳孔位置），lightsoff.py（把插画里亮着的窗户涂掉并列出来，代码再一扇扇点亮），
+  tools/         render.py（导出视频 / 截图 / 拼板 / 检查 / qa / 角色定型图），qa.py（render.py qa：用真实渲染的帧量出唱到的词是否真的显示、字是否出框、主体是否出画、镜头动不动），new_project.py（新建项目），frames.py（把视频 / 静帧打包给 roto.js / illust.js），dreamina.py（用即梦画布 CLI 生成插画和图生视频片段），eyetrack.py（量帧包里眼睛每张画的开合和瞳孔位置），lightsoff.py（把插画里亮着的窗户涂掉并列出来，代码再一扇扇点亮），
                  lyric_timing.py（不含歌词文字的时间：data/timing.json，可以进 git）
   template/      新项目模板：会动的歌词字幕 + 风格圣经模板 TREATMENT.md
-  projects/      你的项目。anime-pdoom 是示例（10 秒二次元 demo），pigment-demo 是 pigment.js 的样张，lumen-demo 是 lumen.js 的样张，roto-demo 是 roto.js 的样张（即梦素材 → 印刷赛璐璐），transition-demo 是转场的样张，kit-demo 是 camera.js / layout.js 和 qa 约定的样张（三个短镜头），pdoom-print 是 print.js 的示例（P(doom) 的 ASCII 打印稿版，全部代码绘制），pdoom-sign 是一轮出片流程的示例（P(doom) 做成工业安全须知：象形小人、警示牌、刻度盘；由 DeepSeek 按 docs/briefs/pdoom-sign 的施工图做出、qa 把关打磨四轮，全部代码绘制）
+  projects/      你的项目。anime-pdoom 是示例（10 秒二次元 demo），pigment-demo 是 pigment.js 的样张，lumen-demo 是 lumen.js 的样张，roto-demo 是 roto.js 的样张（即梦素材 → 印刷赛璐璐），transition-demo 是转场的样张，kit-demo 是 camera.js / layout.js 和 qa 约定的样张（三个短镜头），act-demo 是 act.js、reads 和角色定型图的样张（原创角色 Pip，三个短镜头），pdoom-print 是 print.js 的示例（P(doom) 的 ASCII 打印稿版，全部代码绘制），pdoom-sign 是一轮出片流程的示例（P(doom) 做成工业安全须知：象形小人、警示牌、刻度盘；由 DeepSeek 按 docs/briefs/pdoom-sign 的施工图做出、qa 把关打磨四轮，全部代码绘制）
   docs/ENGINE.md 引擎 API 参考（写镜头时看）
   PROMPTS.md     分阶段提示词手册（和 Claude 一起做新 MV 时用）
   CLAUDE.md      给 Claude 的项目约定（在这个文件夹里用 Claude Code 时自动读取）
@@ -53,15 +54,23 @@ uv run tools/render.py projects/my-song check          # 每个镜头渲一帧�
 uv run tools/render.py projects/my-song qa             # 量观众看到的问题，有错误就退出码 1，截图在 out/qa/（见下）
 uv run tools/render.py projects/my-song sheet --cuts
 uv run tools/render.py projects/my-song strip --t 40.2 --dur 1.2   # 关键动作：从 40.2 s 起每 0.2 s 一帧 → out/strip-0040.20.png
+uv run tools/render.py projects/my-song model          # 有角色时：定型图（每个视角、情绪、关键姿势一页）→ out/model-<名字>.png
 
 # 6. 导出
 uv run tools/render.py projects/my-song                       # 1080p，project.js 里的 fps
 uv run tools/render.py projects/my-song --samples 4           # 加运动模糊（慢 4 倍）
 uv run tools/render.py projects/my-song --from 30 --to 45     # 只导一段
 uv run tools/render.py projects/my-song --workers 6           # 并行浏览器数（默认按 CPU 核数，最多 4）
+uv run tools/render.py projects/my-song --fresh               # 不用留下的块，全部重渲（--clean：导完删掉它们）
 ```
 
-导出是并行的：帧分成几段，每段一个无头浏览器和一个 x264 同时渲染，最后无损拼接再合上歌。帧以 JPEG（质量 0.98）传出页面，比无损 PNG 快约 1.7 倍，差别低于 x264 本身的压缩损失；要无损就加 `--png`。Ctrl-C 会等每段渲完手上的帧、清掉临时文件再退出，再按一次立即退出。
+导出是分块并行的：整片切成约 4 秒一块（`--chunk`），几个无头浏览器 + x264 从队列里一块块取着渲（重的段落不会拖住某一个），最后无损拼接再合上歌。渲好的块留在 `out/.chunks/`，按"导出设置 + 帧区间 + 这一块用到的文件"命名，所以：
+
+- **中断了接着渲**：Ctrl-C、崩溃、合盖睡眠之后，再运行同一条命令，已经渲好的块直接用。Ctrl-C 会等每个浏览器渲完手上那一帧再退出，再按一次立即退出；两种情况渲好的块都保留。
+- **改一个镜头只重渲那几块**：块的名字里有它出现的镜头的场景文件的哈希（以及它们用到全局名字的其他场景文件）；改了 lib、timeline、project.js、data 或用到的 kit，就全部重渲。
+- 出过场景错误的块会照常拼进这次的视频，但不留下。块大约和成片一样大，导完会打印占了多少；`--clean` 导完就删。
+
+帧以 JPEG（质量 0.98）传出页面，比无损 PNG 快约 1.7 倍，差别低于 x264 本身的压缩损失；要无损就加 `--png`。
 
 颜色按 BT.709 转换并写进文件（高清视频的标准）。不写的话，按 709 解码的播放器和网站转码会让颜色偏移，饱和的红、青最明显（釉里红 #A83A3C 会偏约 9 级）。
 
