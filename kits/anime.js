@@ -27,7 +27,7 @@ function paintCumulus(dst, cx, base, width, height, seed, sun = [W / 2, H]) {
   const pad = width * 0.45, bx = cx - width / 2 - pad, by = base - height - pad, bw = width + pad * 2, bh = height + pad + 30;
   const cw = Math.ceil(bw), ch = Math.ceil(bh);
   const union = (g, dx, dy, grow = 0) => { g.beginPath(); for (const [x, y, r] of bumps) { g.moveTo(x + dx + r + grow, y + dy); g.arc(x + dx, y + dy, r + grow, 0, TAU); } };
-  const c = mk(cw, ch), g = c.getContext('2d'); g.translate(-bx, -by);
+  const c = mkHi(cw, ch), g = c.getContext('2d'); g.translate(-bx, -by);   // output-scale layers (engine/core.js mkHi)
   g.save(); g.beginPath(); g.rect(bx, by, bw, base - by); g.clip();
   const sg = g.createLinearGradient(0, base - height, 0, base);
   sg.addColorStop(0, '#8d7bbb'); sg.addColorStop(1, '#6b5089');
@@ -35,7 +35,7 @@ function paintCumulus(dst, cx, base, width, height, seed, sun = [W / 2, H]) {
   g.restore();
   // cel bands: the part of the silhouette that the shifted silhouette does not cover
   const band = (col, dx, dy) => {
-    const b = mk(cw, ch), bg = b.getContext('2d'); bg.translate(-bx, -by);
+    const b = mkHi(cw, ch), bg = b.getContext('2d'); bg.translate(-bx, -by);
     bg.fillStyle = col; union(bg, 0, 0); bg.fill();
     bg.globalCompositeOperation = 'destination-out'; union(bg, -dx, -dy); bg.fill();
     g.save(); g.setTransform(1, 0, 0, 1, 0, 0); g.globalCompositeOperation = 'source-atop'; g.drawImage(b, 0, 0); g.restore();
@@ -48,7 +48,7 @@ function paintCumulus(dst, cx, base, width, height, seed, sun = [W / 2, H]) {
   // inner definition: a few lit crescents on the upper bumps
   g.save(); g.globalCompositeOperation = 'source-atop';
   bumps.forEach(([x, y, r], i) => { if (i % 3 !== 1 || y > base - height * 0.25) return;
-    const b = mk(cw, ch), bg = b.getContext('2d'); bg.translate(-bx, -by);
+    const b = mkHi(cw, ch), bg = b.getContext('2d'); bg.translate(-bx, -by);
     bg.fillStyle = 'rgba(210,160,210,0.55)'; bg.beginPath(); bg.arc(x, y, r, Math.PI * 1.05, Math.PI * 1.95); bg.lineTo(x, y); bg.fill();
     bg.globalCompositeOperation = 'destination-out'; bg.beginPath(); bg.arc(x + r * 0.12, y + r * 0.2, r * 0.95, 0, TAU); bg.fill();
     g.save(); g.setTransform(1, 0, 0, 1, 0, 0); g.drawImage(b, 0, 0); g.restore(); });
@@ -60,7 +60,7 @@ function paintCumulus(dst, cx, base, width, height, seed, sun = [W / 2, H]) {
 // ------------------------------------------------------------------ rim light: render a character on its own layer, light the edges facing (lx, ly)
 let CHAR = null, RIM = null;
 function drawLit(g, fn, lx, ly, color, alpha = 1) {
-  if (!CHAR || CHAR.width !== W) { CHAR = mk(W, H); RIM = mk(W, H); }
+  if (!MV.fits(CHAR, W, H)) { CHAR = mkHi(W, H); RIM = mkHi(W, H); }
   const c = CHAR.getContext('2d'); c.setTransform(1, 0, 0, 1, 0, 0); c.clearRect(0, 0, W, H); fn(c);
   const r = RIM.getContext('2d'); r.setTransform(1, 0, 0, 1, 0, 0); r.globalCompositeOperation = 'source-over'; r.clearRect(0, 0, W, H);
   r.drawImage(CHAR, 0, 0); r.globalCompositeOperation = 'source-in'; r.fillStyle = color; r.fillRect(0, 0, W, H);

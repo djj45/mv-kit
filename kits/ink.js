@@ -301,7 +301,7 @@ function inkRidge(g, x0, x1, baseY, h, o = {}) {
     ridge.push([x, baseY - Math.max(0, y)]);
   }
   const top = baseY - h, depth = o.depth ?? h * 0.25;
-  const L = mk(x1 - x0 + 200, h + depth + 200), lg = L.getContext('2d'), ox = x0 - 100, oy = top - 100;
+  const L = mkHi(x1 - x0 + 200, h + depth + 200), lg = L.getContext('2d'), ox = x0 - 100, oy = top - 100;   // output-scale layer
   lg.translate(-ox, -oy);
   // body wash: dark along the ridge, fading towards the mist
   // the wash hangs below the ridge by an amount that shrinks to nothing where the range ends (no hard sides)
@@ -343,7 +343,7 @@ function inkRidge(g, x0, x1, baseY, h, o = {}) {
     const s = 2.5 + R() * 4; lg.fillStyle = ink(Math.min(0.95, a * 1.6));
     lg.beginPath(); lg.ellipse(p[0] + (R() - 0.5) * 16, p[1] + R() * 10, s, s * 0.7, R() * 3, 0, TAU); lg.fill();
   }
-  granulate(lg, L.width, L.height, seed, 0.45, 1 / 30);
+  granulate(lg, ...MV.sizeOf(L), seed, 0.45, 1 / 30);
   g.save(); if (o.blur) g.filter = `blur(${o.blur}px)`; g.drawImage(L, ox, oy); g.restore();
   return ridge;
 }
@@ -439,7 +439,8 @@ function drawChar(g, text, x, y, size, age, lead, fade, latin, ghostMul = 1) {
   if (rev >= 1) { g.fillStyle = ink(dark * fade); g.fillText(text, x, y); }
   else if (rev > 0) {
     const w = Math.ceil(g.measureText(text).width + fs * 0.5), h = Math.ceil(fs * 1.6);
-    if (!CHC || CHC.width < w || CHC.height < h) CHC = mk(Math.max(w, CHC ? CHC.width : 0), Math.max(h, CHC ? CHC.height : 0));
+    const [cw0, ch0] = CHC ? MV.sizeOf(CHC) : [0, 0];               // the glyph layer is output-scale: sharp at 4K
+    if (!CHC || cw0 < w || ch0 < h) CHC = mkHi(Math.max(w, cw0), Math.max(h, ch0));
     const c = CHC.getContext('2d'); c.setTransform(1, 0, 0, 1, 0, 0); c.globalCompositeOperation = 'source-over'; c.filter = 'none'; c.clearRect(0, 0, w, h);
     c.font = g.font; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillStyle = ink(dark); c.fillText(text, w / 2, h / 2);
     const fe = fs * 0.4, span = latin ? w : fs * 1.1, a0 = (latin ? w / 2 : h / 2) - span / 2, edge = lerp(a0, a0 + span + fe, rev);

@@ -62,6 +62,71 @@ const onTwos = t => tick(t) / MV.drawRate;
 
 function mk(w, h) { const c = document.createElement('canvas'); c.width = Math.max(1, Math.round(w)); c.height = Math.max(1, Math.round(h)); return c; }
 
-MV.util = { TAU, clamp, lerp, remap, smoothstep, ease, prog, keys, pulse, hash, mulberry32, noise1, noise2, fbm1, tick, onTwos, mk };
+// ---- output scale (1080p and 4K from the same project)
+// Scenes and kits draw in DESIGN units: W × H is the project's width / height (1920 × 1080), and every coordinate,
+// font size, line width, blur and shadow is in those units. The output and the full-frame layers have MV.scale times
+// as many pixels (render.py --scale 2 / --4k: 3840 × 2160). A layer made with mkHi(w, h) has w·k × h·k pixels and a
+// 2D context that already draws in design units; on such layers (and only there) the context is patched so that
+//   setTransform / resetTransform / getTransform work in design units (setTransform(1, 0, 0, 1, 0, 0) = "reset"),
+//   drawImage of a scaled layer takes its size and source rectangle in design units (drawImage(layer, 0, 0) fits),
+//   shadowBlur / shadowOffsetX / Y and the px lengths in filter ('blur(6px)') are in design units (Chrome measures
+//   them in bitmap pixels, untouched by the transform),
+//   createPattern of a scaled layer tiles it at its design size.
+// Raw pixel access is NOT translated: canvas.width / height, getImageData / putImageData are bitmap pixels (use
+// MV.sizeOf(c) for the design size). Ordinary mk() canvases stay 1× (analysis, textures, low-res soft buffers);
+// drawn onto a scaled layer they are scaled up — correct, just soft. At MV.scale = 1 nothing is patched or flagged:
+// a 1080p render is exactly what it was before this existed.
+MV.scale = (() => { try { const s = +new URLSearchParams(G.location.search).get('scale'); return s > 0 ? s : 1; } catch (e) { return 1; } })();
+/** A canvas of w × h DESIGN units with MV.scale × as many pixels; its 2D context draws in design units. */
+function mkHi(w, h) {
+  const k = MV.scale;
+  if (k === 1) return mk(w, h);
+  const c = mk(w * k, h * k);
+  c.__k = c.width / Math.max(1, Math.round(w));
+  c.getContext('2d').setTransform(1, 0, 0, 1, 0, 0);
+  return c;
+}
+/** [w, h] in design units of a canvas / image (a mkHi layer reports its design size, anything else its pixels). */
+MV.sizeOf = c => { const k = c.__k || 1; return [(c.naturalWidth || c.videoWidth || c.width) / k, (c.naturalHeight || c.videoHeight || c.height) / k]; };
+/** Does canvas c match a w × h design-unit layer at the current scale (for "make it once, remake on resize" caches)? */
+MV.fits = (c, w, h) => !!c && c.width === Math.max(1, Math.round(w * MV.scale)) && c.height === Math.max(1, Math.round(h * MV.scale));
+
+function installScale() {
+  const P = CanvasRenderingContext2D.prototype, K = ctx => ctx.canvas && ctx.canvas.__k;
+  const st = P.setTransform, rt = P.resetTransform, gt = P.getTransform, di = P.drawImage, cp = P.createPattern;
+  P.setTransform = function (a, b, c, d, e, f) {
+    const s = K(this);
+    if (!s) return st.apply(this, arguments);
+    if (a === undefined || (typeof a === 'object' && a)) { const m = new DOMMatrix(a === undefined ? undefined : [a.a ?? a.m11 ?? 1, a.b ?? a.m12 ?? 0, a.c ?? a.m21 ?? 0, a.d ?? a.m22 ?? 1, a.e ?? a.m41 ?? 0, a.f ?? a.m42 ?? 0]); ({ a, b, c, d, e, f } = m); }
+    return st.call(this, a * s, b * s, c * s, d * s, e * s, f * s);
+  };
+  P.resetTransform = function () { return K(this) ? this.setTransform(1, 0, 0, 1, 0, 0) : rt.call(this); };
+  P.getTransform = function () { const m = gt.call(this), s = K(this); return s ? new DOMMatrix([m.a / s, m.b / s, m.c / s, m.d / s, m.e / s, m.f / s]) : m; };
+  P.drawImage = function (img, ...r) {
+    const s = img && img.__k;
+    if (!s) return di.call(this, img, ...r);
+    if (r.length === 2) return di.call(this, img, r[0], r[1], img.width / s, img.height / s);
+    if (r.length === 8) return di.call(this, img, r[0] * s, r[1] * s, r[2] * s, r[3] * s, r[4], r[5], r[6], r[7]);
+    return di.call(this, img, ...r);
+  };
+  for (const key of ['shadowBlur', 'shadowOffsetX', 'shadowOffsetY']) {
+    const dsc = Object.getOwnPropertyDescriptor(P, key);
+    Object.defineProperty(P, key, { configurable: true, enumerable: dsc.enumerable,
+      get() { const v = dsc.get.call(this), s = K(this); return s ? v / s : v; },
+      set(v) { const s = K(this); dsc.set.call(this, s ? v * s : v); } });
+  }
+  const fd = Object.getOwnPropertyDescriptor(P, 'filter'), PX = /(-?\d*\.?\d+(?:e[-+]?\d+)?)px/gi;
+  Object.defineProperty(P, 'filter', { configurable: true, enumerable: fd.enumerable,
+    get() { const v = fd.get.call(this), s = K(this); return s ? v.replace(PX, (m, n) => `${+n / s}px`) : v; },
+    set(v) { const s = K(this); fd.set.call(this, s ? String(v).replace(PX, (m, n) => `${+n * s}px`) : v); } });
+  P.createPattern = function (img, rep) {
+    const p = cp.call(this, img, rep), s = img && img.__k;
+    if (p && s && p.setTransform) p.setTransform(new DOMMatrix([1 / s, 0, 0, 1 / s, 0, 0]));
+    return p;
+  };
+}
+if (MV.scale !== 1 && G.CanvasRenderingContext2D) installScale();
+
+MV.util = { TAU, clamp, lerp, remap, smoothstep, ease, prog, keys, pulse, hash, mulberry32, noise1, noise2, fbm1, tick, onTwos, mk, mkHi };
 Object.assign(G, MV.util);
 })(window);

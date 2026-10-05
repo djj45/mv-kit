@@ -77,7 +77,8 @@ MV.setup = async function () {
   MV.lyrics = new MV.Lyrics(D.lyrics);
   MV.audio = new MV.Audio(D.audio, { bpm: P.bpm, duration: P.to || 600 });
   if (P.to == null) P.to = MV.audio.duration || 60;
-  MV.FRAME = mk(W, H); MV.ACC = mk(W, H); MV.XFADE = mk(W, H); MV.XA = mk(W, H); MV.MASK = mk(W, H); MV.OVL = mk(W, H); MV.GRAIN = makeGrain();
+  // the frame buffers are output-scale layers (W × H design units, MV.scale × the pixels: engine/core.js mkHi)
+  MV.FRAME = mkHi(W, H); MV.ACC = mkHi(W, H); MV.XFADE = mkHi(W, H); MV.XA = mkHi(W, H); MV.MASK = mkHi(W, H); MV.OVL = mkHi(W, H); MV.GRAIN = makeGrain();
   for (const fn of initHooks) await fn(MV);
   const L = MV.lyrics, A = MV.audio;
   const helpers = {

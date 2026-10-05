@@ -47,6 +47,9 @@ const PAPER_TYPE = { none: 0, xuan: 1, biscuit: 2, glaze: 3 };
 const hex3 = h => { const n = parseInt(h.replace('#', ''), 16); return [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255]; };
 
 // ---------------------------------------------------------------- GLSL
+// SC: rendering above 1× (MV.scale is fixed for the run): only then are the scale-aware expressions compiled in, so
+// the 1× shaders are exactly the old ones (bit-identical 1080p).
+const SC = (MV.scale || 1) !== 1;
 const VS = `#version 300 es
 in vec2 p; void main() { gl_Position = vec4(p, 0., 1.); }`;
 
@@ -63,7 +66,8 @@ const vec2 PD[12] = vec2[12](vec2(-.326, -.406), vec2(-.840, -.074), vec2(-.696,
 const FS_COMP = `#version 300 es
 precision highp float; out vec4 o;
 uniform sampler2D uWet, uDry, uCol, uRamp;
-uniform vec2 uRes;
+uniform vec2 uRes;        // the layers' DESIGN size (px); uK = texture px per design px (MV.scale)
+uniform float uK;
 uniform vec3 uPaper, uPaperRef, uSpot;
 uniform int uType;
 uniform vec3 uAnchor;     // world offset x, y (px) and scale
@@ -113,7 +117,7 @@ float tapW(vec2 fc, float r, float ang) {
   return a / 12.;
 }
 void main() {
-  vec2 fc = vec2(gl_FragCoord.x, uRes.y - gl_FragCoord.y), uv = fc / uRes;
+  vec2 fc = ${SC ? 'vec2(gl_FragCoord.x, uRes.y * uK - gl_FragCoord.y) / uK' : 'vec2(gl_FragCoord.x, uRes.y - gl_FragCoord.y)'}, uv = fc / uRes;   // design px: the same paper at any scale
   vec2 p = (fc + uAnchor.xy) / uAnchor.z + uSeed * 97.;
   float g1 = vn(p * .35), g2 = fbm(p * .06);
   // wet: noisy bleed + pigment pooling at the edges (small blur - large blur) + granulation
@@ -121,7 +125,7 @@ void main() {
   if (uWetP.x > .05) {
     float ang = vn(p * .05) * 6.2832;
     float a = tapW(fc, uWetP.x, ang), sm = tapW(fc, uWetP.x * .4, ang + 1.3);
-    float R = uWetP.x * 3.2, lod = max(0., log2(R) - 1.2), big = 0.;   // wide blur: jittered taps on a mip level (no box steps)
+    float R = uWetP.x * 3.2, lod = max(0., log2(R) - 1.2)${SC ? ' + log2(uK)' : ''}, big = 0.;   // wide blur: jittered taps on a mip level (no box steps)
     for (int i = 0; i < 6; i++) { vec2 d = PD[i * 2]; big += textureLod(uWet, (fc + vec2(cos(ang) * d.x - sin(ang) * d.y, sin(ang) * d.x + cos(ang) * d.y) * R * .8) / uRes, lod).a; }
     big /= 6.;
     wet = mix(s0, a, .72) * (.88 + .2 * g2) + max(0., sm - big) * uWetP.y * (.8 + .5 * g1);
@@ -136,7 +140,8 @@ void main() {
   float D = 1. - (1. - clamp(wet, 0., 1.)) * (1. - clamp(dry, 0., 1.));
   // 晕散: dense pigment diffuses a pale halo into the glaze round it
   if (uWetP.w > 0.) {
-    float hd = max(max(textureLod(uWet, uv, 1.6).a, textureLod(uDry, uv, 1.6).a), .8 * max(textureLod(uWet, uv, 2.6).a, textureLod(uDry, uv, 2.6).a));
+    float l1 = 1.6${SC ? ' + log2(uK)' : ''}, l2 = 2.6${SC ? ' + log2(uK)' : ''};
+    float hd = max(max(textureLod(uWet, uv, l1).a, textureLod(uDry, uv, l1).a), .8 * max(textureLod(uWet, uv, l2).a, textureLod(uDry, uv, l2).a));
     D = max(D, uWetP.w * smoothstep(.25, .9, hd) * .5 * (.75 + .5 * g1));
   }
   // 铁锈斑: small round dark spots with a soft dark surround, clustered, only where the pigment is heavy
@@ -157,7 +162,8 @@ precision highp float; out vec4 o;
 uniform sampler2D uSrc;
 uniform vec2 uRes;
 uniform vec3 uPaperRef;
-uniform vec4 uP;          // rim, wick, wick radius px, rim radius px
+uniform vec4 uP;          // rim, wick, wick radius px, rim radius px (output px: design px × uK)
+uniform float uK;
 ${NOISE}
 float lum(vec3 c) { return dot(c, vec3(.299, .587, .114)); }
 float Lp;
@@ -171,7 +177,7 @@ void main() {
   Lp = lum(uPaperRef);
   vec2 fc = vec2(gl_FragCoord.x, uRes.y - gl_FragCoord.y), uv = fc / uRes;
   vec3 c = texture(uSrc, uv).rgb;
-  float D = den(c), ang = h21(floor(fc / 3.)) * 6.2832;
+  float D = den(c), ang = h21(floor(fc / ${SC ? '(3. * uK)' : '3.'})) * 6.2832;
   // rim: small blur - large blur of the density, positive part = the inside edge of every wash
   float sm = tapD(fc, uP.w * .25, ang), big = 0., lod = max(0., log2(uP.w) - 1.2);
   for (int i = 0; i < 6; i++) { vec2 d = PD[i * 2]; big += den(textureLod(uSrc, (fc + vec2(cos(ang) * d.x - sin(ang) * d.y, sin(ang) * d.x + cos(ang) * d.y) * uP.w * .8) / uRes, lod).rgb); }
@@ -179,7 +185,7 @@ void main() {
   float rim = max(0., sm - big) * smoothstep(.02, .15, D);
   // wick: where the neighbourhood holds more ink than this pixel, some of it seeps in (outward only)
   float nb = tapD(fc, uP.z, ang + 2.1);
-  float wick = max(0., nb - D) * (.75 + .5 * vn(fc * .08));
+  float wick = max(0., nb - D) * (.75 + .5 * vn(fc${SC ? ' / uK' : ''} * .08));
   float k = clamp(1. - uP.x * rim * 1.2 - uP.y * wick * .9, 0., 1.);
   // darken towards the ink's own hue: multiply by the paper-relative transmittance
   o = vec4(c * k, 1.);
@@ -237,8 +243,9 @@ function rampTex(unit, ramp, paperRef) {
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 256, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, px);
   for (const [k2, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k2, v);
 }
-function run(w, h) {
+function run(w, h, k = 1) {      // w × h output px; k = px per design px (drawImage(GLC, …) then takes design units)
   if (GLC.width !== w || GLC.height !== h) { GLC.width = w; GLC.height = h; }
+  if (k !== 1) GLC.__k = k; else delete GLC.__k;
   gl.viewport(0, 0, w, h);
   gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -246,8 +253,10 @@ function run(w, h) {
 
 // ---------------------------------------------------------------- layers API
 function pigmentLayers(w = W, h = H) {
+  // w × h DESIGN units; the layers are output-scale (MV.scale × the pixels: sharp at 4K), drawn into in design units
   const L = { w, h, canvases: {} };
-  for (const k of ['wet', 'dry', 'col']) { L.canvases[k] = mk(w, h); L[k] = L.canvases[k].getContext('2d'); }
+  for (const k of ['wet', 'dry', 'col']) { L.canvases[k] = mkHi(w, h); L[k] = L.canvases[k].getContext('2d'); }
+  L.pw = L.canvases.wet.width; L.ph = L.canvases.wet.height; L.k = L.pw / Math.max(1, Math.round(w));
   L.clear = () => { for (const k of ['wet', 'dry', 'col']) { const c = L[k]; c.setTransform(1, 0, 0, 1, 0, 0); c.globalAlpha = 1; c.globalCompositeOperation = 'source-over'; c.filter = 'none'; c.clearRect(0, 0, w, h); } return L; };
   return L;
 }
@@ -268,7 +277,7 @@ function pigmentComp(L, o = {}) {
   upload('wet', 0, L.canvases.wet, true); upload('dry', 1, L.canvases.dry, true); upload('col', 2, L.canvases.col, false);
   rampTex(3, q.ramp, q.paperRef);
   gl.uniform1i(u.uWet, 0); gl.uniform1i(u.uDry, 1); gl.uniform1i(u.uCol, 2); gl.uniform1i(u.uRamp, 3);
-  gl.uniform2f(u.uRes, L.w, L.h);
+  gl.uniform2f(u.uRes, L.pw / L.k, L.ph / L.k); gl.uniform1f(u.uK, L.k);
   const type = PAPER_TYPE[q.paper] ?? 1;
   gl.uniform3fv(u.uPaper, type === 0 ? [1, 1, 1] : hex3(q.paperColor || q.paperRef));
   gl.uniform3fv(u.uPaperRef, hex3(q.paperRef));
@@ -279,7 +288,7 @@ function pigmentComp(L, o = {}) {
   gl.uniform1f(u.uSeed, q.seed || 0);
   gl.uniform4f(u.uWetP, q.bleed, q.rim, q.gran, q.halo);
   gl.uniform4f(u.uDryP, q.tooth, q.jitter, q.spots, 0);
-  run(L.w, L.h);
+  run(L.pw, L.ph, L.k);
   return GLC;
 }
 
@@ -297,10 +306,11 @@ function pigmentPass(src, o = {}) {
   gl.useProgram(pr.p);
   upload('src', 0, src, true);
   gl.uniform1i(u.uSrc, 0);
-  gl.uniform2f(u.uRes, src.width, src.height);
+  const k = src.__k || 1;                                       // the frame is output-scale: radii are design px × k
+  gl.uniform2f(u.uRes, src.width, src.height); gl.uniform1f(u.uK, k);
   gl.uniform3fv(u.uPaperRef, hex3(q.paper));
-  gl.uniform4f(u.uP, q.rim, q.wick, q.wickR, q.rimR);
-  run(src.width, src.height);
+  gl.uniform4f(u.uP, q.rim, q.wick, q.wickR * k, q.rimR * k);
+  run(src.width, src.height, k);
   const g = src.getContext('2d');
   g.save(); g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 1; g.globalCompositeOperation = 'copy'; g.filter = 'none';
   g.drawImage(GLC, 0, 0); g.restore();

@@ -219,7 +219,8 @@ function shProject(z, L, pen) {
  * lit inner edge of those seams (both get a context with composite mode already set and clipped to the shape).
  */
 function silhouette(g, drawFn, o = {}) {
-  const res = o.res ?? 0.5, L = o.L ?? 900, z = o.z ?? 0;
+  // res is a fraction of the DESIGN size; the layer gets MV.scale × that many pixels, so a crisp cut stays crisp at 4K
+  const res = (o.res ?? 0.5) * (MV.scale || 1), L = o.L ?? 900, z = o.z ?? 0;
   const c = shLayer(res).getContext('2d');
   c.save(); c.setTransform(res, 0, 0, res, 0, 0);
   drawFn(c);
