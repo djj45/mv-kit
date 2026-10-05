@@ -12,13 +12,15 @@ mv-kit/
   engine/        渲染引擎（与风格无关）：数据 API、时间线、转场（推拉匹配 / 平移 / 颗粒重组）、后期、运动模糊、预览播放器
   kits/          camera.js（镜头语言：默认缓推、局部放大并跟随、二维转三维、主体不出画）和 layout.js（放进框里的字：表格、面板、自动缩字），每个项目默认带；
                  act.js（角色表演：预备、挤压拉伸、过冲回弹、停顿、跟随、错开，演出来的情绪变化和锁拍的舞步；和画风无关，有角色的项目加上）；
-                 风格工具包：anime.js（日本 TV 动画赛璐璐风）、ink.js（水墨）、pigment.js（WebGL 颜料合成层：宣纸 / 素胚 / 青花釉面）、qinghua.js（青花纹饰：勾线、分水、纹样、回转体瓶身、竖排歌词）、lumen.js（发光数据 / 终端科幻：WebGL 点云、光线、景深、泛光，终端歌词和 HUD）、roto.js（转描：把 AI 生成的视频 / 静帧重画成孔版印刷赛璐璐，WebGL）、print.js（行式打印机：画面按形状匹配成 ASCII 字符、叠打、绿条纹连续纸和色带油墨，WebGL）
+                 风格工具包：anime.js（日本 TV 动画赛璐璐风）、ink.js（水墨）、pigment.js（WebGL 颜料合成层：宣纸 / 素胚 / 青花釉面）、qinghua.js（青花纹饰：勾线、分水、纹样、回转体瓶身、竖排歌词）、lumen.js（发光数据 / 终端科幻：WebGL 点云、光线、景深、泛光，终端歌词和 HUD）、roto.js（转描：把 AI 生成的视频 / 静帧重画成孔版印刷赛璐璐，WebGL）、print.js（行式打印机：画面按形状匹配成 ASCII 字符、叠打、绿条纹连续纸和色带油墨，WebGL）；
+                 接在 lumen 上的 solid.js（受光的面：实体、玻璃折射、全息面，带深度和抗锯齿；全屏 GLSL：光线步进、场、热力图，和点云共用相机、深度和泛光），
+                 和画风无关的 sim.js（确定性的模拟：固定步长 + 检查点，状态仍然只由 t 决定：沙粒、群体、裂纹）
   analysis/      音乐分析：analyze_audio.py（节拍 / 小节 / 段落 / 鼓点 / 包络）
                  align_lyrics.py（Whisper + 对齐 → 逐词时间），separate.py（可选，Demucs 分轨）
   tools/         render.py（导出视频 / 截图 / 拼板 / 检查 / qa / 角色定型图），qa.py（render.py qa：用真实渲染的帧量出唱到的词是否真的显示、字是否出框、主体是否出画、镜头动不动），new_project.py（新建项目），frames.py（把视频 / 静帧打包给 roto.js / illust.js），dreamina.py（用即梦画布 CLI 生成插画和图生视频片段），eyetrack.py（量帧包里眼睛每张画的开合和瞳孔位置），lightsoff.py（把插画里亮着的窗户涂掉并列出来，代码再一扇扇点亮），
                  lyric_timing.py（不含歌词文字的时间：data/timing.json，可以进 git）
   template/      新项目模板：会动的歌词字幕 + 风格圣经模板 TREATMENT.md
-  projects/      你的项目。anime-pdoom 是示例（10 秒二次元 demo），pigment-demo 是 pigment.js 的样张，lumen-demo 是 lumen.js 的样张，roto-demo 是 roto.js 的样张（即梦素材 → 印刷赛璐璐），transition-demo 是转场的样张，kit-demo 是 camera.js / layout.js 和 qa 约定的样张（三个短镜头），act-demo 是 act.js、reads 和角色定型图的样张（原创角色 Pip，三个短镜头），pdoom-print 是 print.js 的示例（P(doom) 的 ASCII 打印稿版，全部代码绘制），pdoom-sign 是一轮出片流程的示例（P(doom) 做成工业安全须知：象形小人、警示牌、刻度盘；由 DeepSeek 按 docs/briefs/pdoom-sign 的施工图做出、qa 把关打磨四轮，全部代码绘制）
+  projects/      你的项目。anime-pdoom 是示例（10 秒二次元 demo），pigment-demo 是 pigment.js 的样张，lumen-demo 是 lumen.js 的样张，solid-demo 是 solid.js + sim.js 的样张（玻璃心形、光线步进晶格、百万沙粒克拉尼图形），roto-demo 是 roto.js 的样张（即梦素材 → 印刷赛璐璐），transition-demo 是转场的样张，kit-demo 是 camera.js / layout.js 和 qa 约定的样张（三个短镜头），act-demo 是 act.js、reads 和角色定型图的样张（原创角色 Pip，三个短镜头），pdoom-print 是 print.js 的示例（P(doom) 的 ASCII 打印稿版，全部代码绘制），pdoom-sign 是一轮出片流程的示例（P(doom) 做成工业安全须知：象形小人、警示牌、刻度盘；由 DeepSeek 按 docs/briefs/pdoom-sign 的施工图做出、qa 把关打磨四轮，全部代码绘制）
   docs/ENGINE.md 引擎 API 参考（写镜头时看）
   PROMPTS.md     分阶段提示词手册（和 Claude 一起做新 MV 时用）
   CLAUDE.md      给 Claude 的项目约定（在这个文件夹里用 Claude Code 时自动读取）

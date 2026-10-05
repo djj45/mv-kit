@@ -44,6 +44,9 @@
 //          lmCodeBg (满屏暗代码纹理; lmSource('scene') = 镜头自己的源码), lmCount / lmFmt (数字滚动), lmFlick (通电闪烁).
 // Post:    a scene returning { glitch: 0..1 } tears the whole frame (bands + RGB split); timeline wipe 'glitch'.
 //
+// Depth: kits/solid.js (listed after lumen) adds lit / glass meshes and raymarched shaders into this same light, with a
+// depth buffer; then lmPoints / lmLines take o.occlude (true: hidden behind them; 'behind': only what is behind them).
+//
 // Deterministic (hash noise only; a frame depends on t). Needs WebGL2 (the exporter asks for the GPU).
 (function (G) {
 'use strict';
@@ -158,7 +161,7 @@ layout(location=2) in vec3 C;
 layout(location=3) in float Sz;
 uniform mat4 uVP, uM;
 uniform vec2 uRes;
-uniform float uSize, uDof, uBlur, uFocus, uRef, uPersp, uGain, uNear, uFog, uInk;
+uniform float uSize, uDof, uBlur, uFocus, uRef, uPersp, uGain, uNear, uFog, uInk, uZ;
 uniform vec4 uTw;          // twinkle, time, drift, drift speed
 out vec2 vQ; out float vR, vSig, vI, vBok; out vec3 vC;
 ${HASH}
@@ -186,7 +189,7 @@ void main() {
   float bok = smoothstep(0., 1., (coc - 1.) / (sig * 2. + 1.5));
   float Rq = max(sig * 3.5, R + 2.);
   vC = uInk > .5 ? -log(max(C, vec3(.02))) : C;
-  gl_Position = vec4(c.xy / c.w + corner * Rq / (uRes * .5), 0., 1.);
+  gl_Position = vec4(c.xy / c.w + corner * Rq / (uRes * .5), uZ > .5 ? c.z / c.w : 0., 1.);
   vQ = corner * Rq; vR = R; vSig = sig; vI = I; vBok = bok;
 }`;
 const FS_PTS = `#version 300 es
@@ -209,7 +212,7 @@ layout(location=2) in vec3 B;
 layout(location=3) in vec2 BC;         // brightness, caps
 uniform mat4 uVP, uM;
 uniform vec2 uRes;
-uniform float uWidth, uGlowR, uDof, uBlur, uFocus, uNear, uFog;
+uniform float uWidth, uGlowR, uDof, uBlur, uFocus, uNear, uFog, uZ;
 out float vU, vV, vL, vCoc, vB, vCaps;
 void main() {
   vec4 ca = uVP * uM * vec4(A, 1.), cb = uVP * uM * vec4(B, 1.);
@@ -223,8 +226,8 @@ void main() {
   float cocA = uBlur + uDof * abs(ca.w - uFocus) / ca.w, cocB = uBlur + uDof * abs(cb.w - uFocus) / cb.w;
   float hw = max(uWidth, 1.) * .5 + max(cocA, cocB) + uGlowR * 4. + 1.5;
   float u = corner.x * L + (corner.x * 2. - 1.) * hw, v = corner.y * hw;
-  gl_Position = vec4((sa + dir * u + nr * v) / (uRes * .5), 0., 1.);
   float wq = corner.x < .5 ? ca.w : cb.w;
+  gl_Position = vec4((sa + dir * u + nr * v) / (uRes * .5), uZ > .5 ? (corner.x < .5 ? ca.z / ca.w : cb.z / cb.w) : 0., 1.);
   vU = u; vV = v; vL = L; vCoc = corner.x < .5 ? cocA : cocB; vCaps = caps;
   vB = BC.x / (uFog > 0. ? 1. + pow(wq / uFog, 2.) : 1.);
 }`;
@@ -331,6 +334,7 @@ void main() {
 let GLC = null, gl = null, FMT = null;
 const PR = {}, VAO = {};
 let LIGHT = null, LEVELS = [], GLOW = null, GLOWX = null, TEX = {}, SCR = null;
+const BEGIN = [];      // lmOnBegin hooks (kits/solid.js resets its per-frame state there)
 function glInit() {
   if (gl) return;
   GLC = document.createElement('canvas'); GLC.width = W; GLC.height = H;
@@ -403,6 +407,28 @@ function fullscreen(fb, w, h) {
   gl.bindFramebuffer(gl.FRAMEBUFFER, fb); gl.viewport(0, 0, w, h);
   gl.bindVertexArray(VAO.full); gl.drawArrays(gl.TRIANGLES, 0, 3); gl.bindVertexArray(null);
 }
+/** A depth buffer on the light target (made on first use, by kits/solid.js): solids and depth-writing shaders fill
+ *  it, and points / lines drawn with o.occlude test against it. Without it lumen stays depth-free, exactly as before. */
+function lmDepth() {
+  glInit();
+  if (!LIGHT.depth) {
+    const rb = gl.createRenderbuffer(); gl.bindRenderbuffer(gl.RENDERBUFFER, rb);
+    gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, W, H);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, LIGHT.fb); gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, rb);
+    gl.clearDepth(1); gl.clear(gl.DEPTH_BUFFER_BIT);
+    LIGHT.depth = rb;
+  }
+  return LIGHT.depth;
+}
+/** o.occlude on lmPoints / lmLines: true | 'front' = hidden behind what is in the depth buffer (solids, a raymarched
+ *  surface); 'behind' = ONLY what is behind it (the half of a cloud seen through glass: see smGlass). */
+function occludeOn(u, o) {
+  const m = o.occlude;
+  if (!m || !LIGHT.depth) { gl.uniform1f(u.uZ, 0); return false; }
+  gl.uniform1f(u.uZ, 1); gl.enable(gl.DEPTH_TEST); gl.depthMask(false); gl.depthFunc(m === 'behind' ? gl.GREATER : gl.LEQUAL);
+  return true;
+}
+function occludeOff() { gl.disable(gl.DEPTH_TEST); gl.depthMask(true); gl.depthFunc(gl.LESS); }
 function camUniforms(u, cam, o) {
   gl.uniformMatrix4fv(u.uVP, false, cam.vp); gl.uniformMatrix4fv(u.uM, false, lmModel(o.model));
   gl.uniform2f(u.uRes, W, H);
@@ -420,7 +446,8 @@ function lmBegin(pal = 'ice', over) {
   S.pal = over ? { ...base, ...over } : base;
   S.glowUsed = false;
   gl.bindFramebuffer(gl.FRAMEBUFFER, LIGHT.fb); gl.viewport(0, 0, W, H);
-  gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.clearColor(0, 0, 0, 1); gl.clearDepth(1); gl.clear(gl.COLOR_BUFFER_BIT | (LIGHT.depth ? gl.DEPTH_BUFFER_BIT : 0));
+  for (const fn of BEGIN) fn(S.pal);
   return S.pal;
 }
 function lmPal(p) { return palOf(p); }
@@ -444,7 +471,9 @@ function lmPoints(cam, P, o = {}) {
   gl.uniform1f(u.uSize, o.size ?? 1.5); gl.uniform1f(u.uRef, cam.ref); gl.uniform1f(u.uPersp, o.persp === false ? 0 : cam.persp);
   gl.uniform1f(u.uGain, o.gain ?? 1); gl.uniform1f(u.uFog, o.fog || 0); gl.uniform1f(u.uInk, S.pal.mode === 'ink' ? 1 : 0);
   gl.uniform4f(u.uTw, o.twinkle || 0, o.t || 0, o.drift || 0, o.speed ?? 1);
+  const oc = occludeOn(u, o);
   gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, n);
+  if (oc) occludeOff();
   gl.bindVertexArray(null); gl.disable(gl.BLEND);
 }
 
@@ -476,7 +505,9 @@ function lmLines(cam, Sg, o = {}) {
   gl.uniform1f(u.uWidth, o.width ?? 1.2); gl.uniform1f(u.uGain, o.gain ?? 1); gl.uniform1f(u.uFog, o.fog || 0);
   gl.uniform1f(u.uGlowA, o.glow ?? 0.18); gl.uniform1f(u.uGlowR, o.glowR ?? 3.5);
   const dash = o.dash || [0, 0]; gl.uniform2f(u.uDash, dash[0], dash[1]);
+  const oc = occludeOn(u, o);
   gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, n);
+  if (oc) occludeOff();
   gl.bindVertexArray(null); gl.disable(gl.BLEND);
 }
 
@@ -1035,8 +1066,16 @@ function lmCodeBg(g, src, o = {}) {
   g.restore();
 }
 
-MV.lumen = { LUMEN, MONO, SANS, lmBegin, lmEnd, lmPal, lmPoints, lmLines, lmGlow, lmCamera, lmOrbit, lmScreen, lmModel, lmXf, LG, lmMorph,
+/** For kits that draw into the same light buffer before the bloom (kits/solid.js). Not a scene API. */
+function lmGL() {
+  glInit();
+  return { gl, W, H, light: LIGHT, fmt: FMT, program, fullscreen, target, bindTex, bufFor, attrib, camUniforms, rgb, emit, lmDepth,
+    pal: () => S.pal, VAO, HASH, VS_FULL };
+}
+function lmOnBegin(fn) { BEGIN.push(fn); }
+
+MV.lumen = { LUMEN, MONO, SANS, lmGL, lmOnBegin, lmBegin, lmEnd, lmPal, lmPoints, lmLines, lmGlow, lmCamera, lmOrbit, lmScreen, lmModel, lmXf, LG, lmMorph,
   lmTerminal, lmCaption, lmAmbient, lmHud, lmSection, lmTag, lmLabel, lmBig, lmCode, lmCodeBg, lmSource, lmCount, lmFmt, lmFlick, lmCss, glitchPass };
-Object.assign(G, { LUMEN, LM_MONO: MONO, LM_SANS: SANS, lmBegin, lmEnd, lmPal, lmPoints, lmLines, lmGlow, lmCamera, lmOrbit, lmScreen, lmModel, lmXf, LG, lmMorph,
+Object.assign(G, { LUMEN, LM_MONO: MONO, LM_SANS: SANS, lmGL, lmOnBegin, lmBegin, lmEnd, lmPal, lmPoints, lmLines, lmGlow, lmCamera, lmOrbit, lmScreen, lmModel, lmXf, LG, lmMorph,
   lmTerminal, lmCaption, lmAmbient, lmHud, lmSection, lmTag, lmLabel, lmBig, lmCode, lmCodeBg, lmSource, lmCount, lmFmt, lmFlick, lmCss });
 })(window);

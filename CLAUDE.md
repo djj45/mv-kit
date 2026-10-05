@@ -14,7 +14,8 @@
 
 ## 代码规则
 
-- 确定性：一帧只由 `f.t` 决定。禁止 `Math.random / Date.now / performance.now`；用 `hash / mulberry32 / noise1`。不在 `render` 里累积状态。
+- 确定性：一帧只由 `f.t` 决定。禁止 `Math.random / Date.now / performance.now`；用 `hash / mulberry32 / noise1`。不在 `render` 里累积状态；写不成时间函数的模拟用 `kits/sim.js` 的 `SIM.make`（固定步长从镜头开头算到 t，带检查点），不要自己在 render 里一帧帧往前推。
+- lumen 画面里要有受光的面（玻璃、金属、分子球棍、立体字）或光线步进的结构时，用 `kits/solid.js`（`smMesh / smGlass / smShader`，见 `docs/ENGINE.md`「solid.js」），画进 lumen 的同一块光里，不要另开一个 WebGL 画布再贴上去（那样拿不到 lumen 的泛光和深度，点云也躲不到实体后面）。
 - 静态的画（背景、贴图）在 `MV.onInit` 或场景 `init()` 里画一次。
 - 手绘感：角色动作和线条抖动用 `f.tq` / `f.tick`（按 `drawRate` 定格），镜头运动用连续的 `f.t`。
 - 颜料 / 纸感用 `kits/pigment.js`：往 `L.wet / L.dry / L.col` 画浓度再 `pigmentDraw`，不要在 Canvas 2D 里用大面积 `filter: blur()` 模拟晕染。纸要按镜头的世界坐标传 `offset`，免得平移时纸纹游动。
