@@ -7,7 +7,7 @@
 输出必须只由 `f.t` 决定：导出时帧会乱序渲染，运动模糊还会在一帧内渲染多个子帧再平均。
 
 - 不要用 `Math.random()`、`Date.now()`、`performance.now()`；用 `hash(a, b, c)`、`mulberry32(seed)`、`noise1(x, seed)`。
-- 不要在 `render()` 里累积状态（计数器、粒子模拟）。需要的话写成时间的函数（粒子 i 的位置 = f(t − 出生时间)）。
+- 不要在 `render()` 里累积状态（计数器、粒子模拟）。需要的话写成时间的函数（粒子 i 的位置 = f(t − 出生时间)）；写不成闭式解的模拟（沙粒、群鸟、裂纹蔓延、训练发散）用 `kits/sim.js` 的 `SIM.make`：状态定义成「镜头开头 init，再按固定步长一步步算到 t」，所以仍然只由 t 决定（见下「sim.js」）。
 - 静态的东西（背景画、贴图、预计算的几何）在 `MV.onInit(fn)` 或场景的 `init()` 里画好一次。
 
 ## 场景
@@ -240,6 +240,7 @@ lmTerminal(g, f);
 
 - 颜色参数都可以写 `'#hex'`、`[r, g, b]`（0..1）或调色板键名 `'fg' 'dim' 'accent' 'hot' 'warn'`；`lmBegin('ice', { accent: '#9cf' })` 只改这一镜。
 - `lmPoints(cam, P, o)`：`size`（对焦距离处的像素半径，近大远小）、`gain`、`color` 或 `colors`（每点 rgb）、`sizes`（每点倍数）、`dof`（无穷远处的弥散像素，按 |深度 − 焦距| 变大，点会变成等能量的光斑）、`focus`（默认相机到目标的距离）、`blur`（平面模糊，`lmScreen()` 时用）、`fog`（亮度减半的距离）、`twinkle` + `t`（闪烁）、`drift` + `t`（每点绕原位飘动，世界单位）、`count`（只画前 n 个：逐步出现）、`model`。
+- `occlude`（`lmPoints` / `lmLines` 都有）：项目带了 `kits/solid.js` 时，光也有了深度。`true` = 躲在实体 / 写深度的着色器后面（被挡住的部分不画）；`'behind'` = **只**画在它后面的那部分（玻璃后面的那一半，见 `smGlass`）。没有 solid.js 时这个参数不起作用，lumen 照旧没有深度。
 - `lmLines(cam, S, o)`：线段每段 8 个数（a xyz、b xyz、亮度、端头：1 = a 端圆头、2 = b 端、3 = 两端；折线内部是平接，所以叠加不会在拐点出亮点）。`width`（像素）、`color`、`gain`、`glow`（贴身光晕 0..1）、`glowR`、`upto`（0..1 按顺序画出，生长的尖端是圆头）、`dash: [实, 虚]`、`dof`、`fog`、`model`。
 - `model: { pos, rot: [rx, ry, rz], scale }` 在 GPU 上变换；标签要跟着转动的点走时用 `cam.project(lmXf(model, p))` → `[x, y, 深度]`。
 - `lmEnd(g, o)`：`bloom`（强度）、`radius`（0..1 光晕宽度）、`levels`、`exposure`、`ca`（边缘色差）、`lens`（边缘压暗）、`blend: 'screen'`（不画底色，把光叠到 g 上已有的画面上）。一帧里可以 begin / end 多次。
@@ -250,6 +251,49 @@ lmTerminal(g, f);
 - 配合：`project.post` 设 `grain ≈ 0.03`、`vignette: 0`（暗角在 `lmEnd` 里按调色板做），`background: '#000'`。网格、星尘、几何都在 `init()` 里建好；大数组（> 4096 个数）按对象缓存到 GPU，原地修改要 `arr.__v++`（`lmMorph` 自动做），小数组每次直接上传。
 
 示例：`projects/lumen-demo`（六个镜头，每种调色板和主要技法各一个）。
+
+**solid.js**（受光的面 + 全屏着色器，接在 lumen 上，WebGL2）：lumen 的规则是「只有光」，画不了的两类东西由它补上，**画进同一块光缓冲、在 lumen 的泛光 / 色调 / 色差之前**，所以和点云、线框是一张画。`project.kits` 里写在 `lumen` 后面：`["lumen", "solid"]`。
+
+```js
+init() {
+  this.heart = SG.implicit((x, y, z) => …, [-1.3, -1.1, -.9], [1.3, 1.3, .9], 120);   // 任意 f(x, y, z) < 0 = 内部
+}
+render(g, f) {
+  const cam = lmOrbit({ … });
+  lmBegin('rose');
+  lmPoints(cam, this.wall, { size: 1.6 });                      // 背景：先画，会透过玻璃被折射
+  smGlass(cam, this.heart, { model, ior: 1.5, tint: 'accent' }, occ => {
+    lmPoints(cam, this.ring, { occlude: occ });                 // 调两次：先画玻璃后面的一半，再画前面的一半
+  });
+  smMesh(cam, this.bolt, { color: 'fg', rim: .8 });             // 不透明受光实体
+  smShader('lattice', SRC, { cam, t: f.t, depth: true, u: { uK: .4 } });   // 全屏 GLSL（光线步进等）
+  lmEnd(g);
+}
+```
+
+- `smMesh(cam, mesh, o)`：三角网格，带深度缓冲，抗锯齿（GPU 支持时 4× MSAA；HUD 角注里可以打 `SG.samples`）。`o.mat`：`'lit'`（默认：不透明，漫反射 + 高光 + 菲涅耳边光 + 暗摄影棚的反射）、`'glass'`（把**已经画好的**光按法线折射过来，红蓝分开的色散、菲涅耳反射、按厚度吸收的染色、内边缘光）、`'xray'`（只有叠加的边光，不写深度：全息 / 幽灵面）、`'depth'`（只写深度）。参数：`model`、`color`、`rim` + `rimColor` + `rimPow`、`spec` + `specColor` + `shine`、`ambient`、`diffuse`、`env`（摄影棚反射）、`light` / `fill`（光的方向）、`gain`、`fog`、`twoSided`（开口的曲面：背面也受光）、`bands: { axis, step, width, color, gain }`（沿一个轴的等高线，屏幕空间抗锯齿：曲面图、地形）、`upto`（0..1 只画前一部分三角形：曲面长出来）；玻璃另有 `ior`、`refract`（像素）、`dispersion`、`tint` + `tintK`、`glow`、`rough`（磨砂模糊）。`paper` 调色板下实体按墨的浓度着色。
+- 画的顺序就是遮挡：实体盖住**之前**画的光；之后画的点和线要躲在实体后面就写 `occlude: true`。实体之间按深度互相遮挡。
+- `smGlass(cam, mesh, o, scene)`：玻璃里外都有东西时用：先写玻璃的深度 → `scene('behind')`（把可能在玻璃后面的东西画一遍，参数直接传给 `occlude`）→ 玻璃（折射前面画的一切）→ `scene('front')`（同样的东西再画一遍，这次只画在玻璃前面的）。在 `smGlass` 之前画的背景不用写 `occlude`：它本来就在后面。
+- `smShader(name, src, o)`：全屏片元着色器，`src` 里写 `vec4 shade(vec2 px)`（px = 成片像素，y 向下），返回光的 rgb 和覆盖度 a。前置库 `SM_GLSL` 已经给了：`smRay(px, ro, rd)`（lumen 相机在这个像素的射线，含 `shift`）、`smHit(p)`（这个像素显示的世界坐标点，`o.depth` 时写进深度缓冲，于是 lumen 的点线能飞到结构后面去）、`hash12 / hash13 / hash33 / vnoise / fbm / rot2`、`sdSphere / sdBox / sdBoxFrame / sdTorus / sdCapsule / smin`、`smRep / smCell`（无限重复的格子和格子编号），uniform `uTime uFg uDim uAccent uHot uWarn uInk uEye`。`o`：`cam`、`t`、`u: { uName: 数 | [2..4 个数] | Float32Array(16) }`（自己在 src 里声明）、`blend`（`'add'` 默认 / `'over'`）、`res`（0.25..1：按比例低分辨率渲染再放大，软的雾、光晕、热力图用；软件渲染时省时间）、`depth`（只在 `res` 为 1 时）。一个名字对应一份源码（按名字编译一次缓存）。在 `smShader` 之后再画的实体不会被它挡住（实体只认自己的深度），需要互相遮挡时先画实体再画着色器。
+- 网格 `{ pos, nrm, idx?, col? }`（Float32Array / Uint32Array），在 `init()` 里用 `SG` 建好：`SG.implicit(fn, lo, hi, n, { grad })`（隐式曲面 fn = 0 的网格，行进四面体法，无须查表、无破洞，顶点按格边共享、法线取梯度：心形曲面、元球、代数曲面；**法线要靠梯度**，fn 在曲面上梯度为零的写法（比如三次方的整式）先化成梯度不为零的等价式，见 solid-demo 的 `glass`）、`SG.sphere(r, seg)`、`SG.tube(a, b, r, seg, { caps })`（键、支杆）、`SG.box([w, h, d])`、`SG.height(fn, [w, d], n)`（y = fn(x, z) 的网格曲面）+ `SG.heightSet(m, fn)`（每帧原地改形：振动的板、波面）、`SG.xf(mesh, model)`、`SG.merge([{ mesh, model, color }, …])`（一个网格：球棍分子）、`SG.wire(mesh)`（网格的边 → lumen 线段，给实体描发光的边）。原地改了数组要 `mesh.__v++`（`heightSet` 自己做）。
+
+**sim.js**（确定性的模拟）：一个模拟在 t 时的状态定义成「在镜头开头 `t0` 调 `init(t0)`，再用固定步长 `dt` 调 `step` 一直到 t」——这是 t 的纯函数，不管帧是怎么要的：导出时每个 worker 接着上一帧往前算；乱序（qa、运动模糊的子帧、从镜头中间开始的块）从 t0 或最近的检查点算起；预览往回拖就回到检查点再往前。检查点（每 `every` 秒存一份状态的拷贝）让跳转便宜。和画风无关，Canvas 2D 的项目也能用。
+
+```js
+init() {
+  this.sand = SIM.make({ dt: 1 / 60, every: 0.5,
+    init: t0 => ({ x: Float32Array.from(…), z: …, rng: SIM.seed(N, 5) }),   // 只放数、typed array、普通对象
+    step: (s, t, dt, i) => { … },                                           // 原地改 s；随机数从 s.rng 里取（SIM.xs）
+  });
+},
+render(g, f) { const s = this.sand.at(f.t, f.from); … }                     // 读它；下一次 at() 会改它
+```
+
+- `step(s, t, dt, i)` 里的 t = t0 + i·dt 是这一步**开始**的时间。随机数只能来自状态（每个粒子一个 xorshift 种子，`SIM.xs(rng, i)`，`SIM.seed(n, s)` 生成）或 `hash(i, …)`，不要 `Math.random`。
+- `make` 的参数：`dt`、`every`（检查点间隔秒数）、`keep`（每次运行最多留几份，开头那份一直留）、`budget`（检查点总字节数）。`at(t, t0)`、`stepAt(t, t0)`、`reset()`。
+- 成本：每个导出 worker 第一次进这个镜头时要从镜头开头算起（solid-demo 的百万沙粒一步约 20 ms，6 秒的镜头几秒钟）。用了 `--samples`（运动模糊）时 `dt` 不要比一个子帧长，否则几个子帧落在同一步上。
+
+示例：`projects/solid-demo`（三个镜头：玻璃心形曲面在跳、光线步进的晶格巨构里穿行、百万沙粒在振动的板上排成克拉尼图形）。
 
 **roto.js**（转描：AI 素材 / 实拍 → 孔版印刷赛璐璐，WebGL2）：把视频片段、静帧（即梦 / 任何生成器的输出、照片、手绘底板）重画成印刷出来的动画赛璐璐，**原始素材不上屏**：保边平涂（三遍）→ 每个像素吸附到镜头调色板里最近的油墨（本色 / 压暗两档）→ 压暗区铺 45° 网点 → XDoG 重新提线、按作画张抖动 → 一版错位的第二色线。然后整帧（歌词一起）过一遍印刷：纸纤维、纸齿、暗版错位、缺墨白点、颗粒、暗角。
 
@@ -338,6 +382,6 @@ render(g, f) {
 
 预览目标 < 40 ms / 帧。Canvas 2D 的大面积 `filter: blur()`、每帧新建大画布、每帧重画静态背景最费时，都应该移到 `init` 里。需要 WebGL 时，在场景里建一个离屏 WebGL 画布，渲染后 `g.drawImage(glCanvas, 0, 0)` 即可。
 
-WebGL 要跑在 GPU 上才快：导出时 `render.py` 已经请求 GPU（macOS 上用 Metal；`MV_ANGLE` 环境变量可改），`render.py … check` 会打印 WebGL 用的是什么渲染器，写着 software / SwiftShader 就是软件渲染，pigment.js 会慢很多。
+WebGL 要跑在 GPU 上才快：导出时 `render.py` 已经请求 GPU（macOS 上用 Metal；`MV_ANGLE` 环境变量可改），`render.py … check` 会打印 WebGL 用的是什么渲染器，写着 software / SwiftShader 就是软件渲染，pigment.js 会慢很多，solid.js 的光线步进（`smShader`）会慢上百倍：软件渲染下先用 `res: 0.5` 看构图，出片在 Mac 上跑。
 
 导出：`render.py` 把整片切成约 `--chunk` 秒（默认 4）一块，`--workers` 个无头浏览器 + x264（默认按 CPU 核数，最多 4）从队列里一块块取，重的段落（WebGL、帧包）不会拖住某一个 worker；最后无损拼接再合上歌。渲好的块留在 `out/.chunks/`，文件名由导出设置、帧区间和**它用到的文件的哈希**组成（共用的：engine、项目用到的 kits、project.js、index.html、lib、timeline.js、data、art、帧包……；加上这一块里出现的镜头各自的场景文件，以及这些场景文件用到全局名字的其他场景文件）。所以：导出中断（Ctrl-C、崩溃、合盖）后再运行同一条命令，从断的地方接着渲；改了一个镜头再导出，只重渲这个镜头所在的块（改了 lib、timeline、kit 就全部重渲）。出过场景错误的块这次照常拼进去，但不留。`--fresh` 全部重渲，`--clean` 导完删掉这些块。这依赖确定性：一帧只由 t 决定。帧以 JPEG（质量 0.98）传出页面；`--png` 改成无损 PNG（每帧慢约 1.7 倍）。因为每一帧只由 t 决定，并行和逐帧渲染的结果一样。画面按 BT.709 矩阵转成 YUV，并在文件里标明 BT.709（原色、传输曲线、矩阵、tv 范围）。
