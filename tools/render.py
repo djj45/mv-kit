@@ -7,6 +7,7 @@
   uv run tools/render.py projects/my-song sheet --cuts      # 3 frames per shot (start / middle / end)
   uv run tools/render.py projects/my-song sheet --n 24      # 24 evenly spaced frames
   uv run tools/render.py projects/my-song strip --t 40.2 --dur 1.2   # a frame every 0.2 s from 40.2 s (key actions) → out/strip-<t>.png
+  uv run tools/render.py projects/my-song model             # the characters' model sheets (MV.model) → out/model-<name>.png
   uv run tools/render.py projects/my-song check             # load, list shots, render one frame per shot, report errors,
                                                             # then the edit's problems no frame shows (MV.lint)
   uv run tools/render.py projects/my-song qa                # measure what a viewer sees: every sung word really on screen,
@@ -28,7 +29,6 @@ install chromium` once). Set CHROME=/path/to/chrome to force one.
 import argparse
 import base64
 import io
-import math
 import os
 import shutil
 import signal
@@ -39,11 +39,11 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from mvproject import check_audio, load_project  # noqa: E402
+from mvproject import KIT, check_audio, load_project  # noqa: E402
 
 ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 ap.add_argument('project')
-ap.add_argument('mode', nargs='?', default='video', choices=['video', 'stills', 'sheet', 'strip', 'check', 'qa'])
+ap.add_argument('mode', nargs='?', default='video', choices=['video', 'stills', 'sheet', 'strip', 'check', 'qa', 'model'])
 ap.add_argument('--from', dest='t0', type=float)
 ap.add_argument('--to', dest='t1', type=float)
 ap.add_argument('--fps', type=int)
@@ -54,6 +54,9 @@ ap.add_argument('--preset', default='slow')
 ap.add_argument('--tune', default=None, help='x264 tune, e.g. animation / film / grain')
 ap.add_argument('--workers', type=int, default=0, help='video: parallel browsers + encoders (0 = auto)')
 ap.add_argument('--png', action='store_true', help='video: lossless PNG frame transfer (slower)')
+ap.add_argument('--chunk', type=float, default=4.0, help='video: seconds per chunk (the unit that is kept and reused)')
+ap.add_argument('--fresh', action='store_true', help='video: render every chunk again, ignoring the kept ones')
+ap.add_argument('--clean', action='store_true', help='video: delete the kept chunks after the export')
 ap.add_argument('--jpeg', action='store_true', help='stills: save JPEG instead of PNG')
 ap.add_argument('--noaudio', action='store_true')
 ap.add_argument('--t', help='stills: comma-separated times; strip: start time')
@@ -63,6 +66,7 @@ ap.add_argument('--cuts', action='store_true', help='sheet: start / middle / end
 ap.add_argument('--dur', type=float, default=1.2, help='strip: seconds to cover')
 ap.add_argument('--step', type=float, default=0.2, help='strip: seconds between frames')
 ap.add_argument('--cols', type=int, default=0, help='sheet: 3 (one shot per row with --cuts); strip: one row, up to 8 a row')
+ap.add_argument('--name', help='model: only this model sheet (default: all of them)')
 ap.add_argument('--out')
 a = ap.parse_args()
 
@@ -127,10 +131,13 @@ class Page:
             raise RuntimeError('PROJECT FAILED TO LOAD:\n  ' + '\n  '.join([fatal or '(timeout)', *errors]))
         self.info = self.page.evaluate('MV_EXPORT.info')
 
-    def frame(self, t, samples, fmt, scene_errors, lock=None):
-        """Render the frame at t, return (encoded image bytes). Scene errors are recorded once per scene."""
+    def frame(self, t, samples, fmt, scene_errors, lock=None, errs=None):
+        """Render the frame at t, return (encoded image bytes). Scene errors are recorded once per scene (and, when
+        errs is a list, appended to it every time)."""
         url, err = self.page.evaluate('([t, n, s, ty, q]) => [MV_EXPORT.frame(t, n, s, ty, q), MV_EXPORT.error()]',
                                       [t, samples, a.shutter, fmt[0], fmt[1]])
+        if err and errs is not None:
+            errs.append(err)
         if err:
             key = err.split(':')[0]
             if lock:
@@ -185,6 +192,27 @@ def main():
             pg.close()
             sys.exit(code)
 
+        if a.mode == 'model':
+            names = [a.name] if a.name else info.get('models') or []
+            if not names:
+                print('no model sheets: register one with MV.model(name, { rows, draw }) next to the character (docs/ENGINE.md «act.js»)')
+            for nm in names:
+                try:
+                    url = pg.page.evaluate('n => MV_EXPORT.model(n)', nm)
+                except Exception as e:  # noqa: BLE001
+                    print(f'model {nm}: {str(e).splitlines()[0]}')
+                    continue
+                err = pg.page.evaluate('MV_EXPORT.error()')
+                if err:
+                    print(f'MODEL ERROR: {err.splitlines()[0]}')
+                f = Path(a.out) if a.out and len(names) == 1 else OUT / f'model-{nm}.png'
+                f.parent.mkdir(parents=True, exist_ok=True)
+                f.write_bytes(base64.b64decode(url.split(',', 1)[1]))
+                print(f)
+            report_browser_errors(errors)
+            pg.close()
+            return
+
         if a.mode == 'check':
             print(f"{info['title']}: {info['width']}x{info['height']} @ {info['fps']} fps, {info['from']:.2f}–{info['to']:.2f} s")
             gpu = pg.page.evaluate('''() => { const c = document.createElement('canvas'), g = c.getContext('webgl2'); if (!g) return null;
@@ -195,6 +223,8 @@ def main():
                 ms = time.time()
                 frame((s['from'] + s['to']) / 2, 1)
                 print(f"  {s['from']:8.3f} – {s['to']:8.3f}  {s['name']:<16} {(time.time() - ms) * 1000:6.0f} ms")
+            if info.get('models'):
+                print(f"model sheets: {', '.join(info['models'])} (render.py model)")
             lint = info.get('lint') or []
             if lint:
                 print(f'timeline / lyric notes ({len(lint)}; red ticks on the preview\'s shot strip; project.lint tunes them):')
@@ -286,8 +316,139 @@ def auto_workers():
     return nw
 
 
+# ---------------------------------------------------------------------------------------------- video export
+# The film is cut into chunks of about --chunk seconds. Workers (a browser + an x264 encoder each) take the next
+# chunk from a queue, so a heavy stretch (WebGL, frame packs) doesn't hold one worker while the others idle. Every
+# finished chunk is kept in out/.chunks/ under a name made of the render settings, its frame range and a hash of
+# the files its frames come from (the shared code, plus the scene files of the shots it shows). So:
+#   · an export that stops (Ctrl-C, a crash, the laptop sleeps) picks up where it stopped: run the same command again;
+#   · after an edit, an export renders again only the chunks whose scenes (or the shared code) changed.
+# Frames depend on f.t only (CLAUDE.md), which is what makes a kept chunk identical to a fresh one.
+
+SKIP_DIRS = {'out', 'stems', 'audio', '.git', 'node_modules', 'dreamina', '__pycache__'}
+SKIP_EXT = {'.md', '.txt', '.mp3', '.wav', '.m4a', '.flac', '.aac', '.ogg', '.mp4', '.mov', '.webm', '.mkv', '.py', '.pyc'}
+BIG = 16 << 20          # files above this are keyed on size + mtime instead of their content
+
+
+def file_key(path):
+    st = path.stat()
+    if st.st_size > BIG:
+        return f'{st.st_size}:{st.st_mtime_ns}'
+    import hashlib
+    return hashlib.sha1(path.read_bytes()).hexdigest()
+
+
+def url_path(src):
+    from urllib.parse import unquote, urlparse
+    return Path(unquote(urlparse(src).path)).resolve() if src else None
+
+
+TOP_NAME = None
+
+
+def top_names(text):
+    """Names a classic script puts in the shared global scope (top-level function / const / let / var / class,
+    window.x = …): another file that uses one of them depends on this file."""
+    import re
+    global TOP_NAME
+    if TOP_NAME is None:
+        TOP_NAME = re.compile(r'^(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)|^(?:const|let|var|class)\s+([A-Za-z_$][\w$]*)'
+                              r'|^\s*(?:window|globalThis)\.([A-Za-z_$][\w$]*)\s*=', re.M)
+    return {n for m in TOP_NAME.finditer(text) for n in m.groups() if n}
+
+
+def idents(text):
+    """The bare identifiers a script mentions (not property names after a dot)."""
+    import re
+    return set(re.findall(r'(?<![\w$.])[A-Za-z_$][\w$]*', text))
+
+
+def input_keys(info):
+    """(shared, per_scene_file): shared = one hash of every file all frames may depend on (engine, the project's
+    kits, project.js, index.html, lib/, timeline.js, data, art, frame packs …); per_scene_file = {path: hash of that
+    scene file and every scene file it leans on}. A scene file that defines a global another scene file uses
+    (classic scripts share one scope) counts for that one too; one that lib/ or timeline.js uses counts as shared."""
+    import hashlib
+    scene_files = {url_path(s) for s in (info.get('sceneSrc') or {}).values() if s}
+    files = set(p for p in (KIT / 'engine').glob('*.js'))
+    files |= {KIT / 'kits' / f'{k}.js' for k in cfg.get('kits', [])}
+    files |= {p for p in (KIT / 'kits').rglob('*') if p.is_file() and p.suffix != '.js' and p.suffix not in SKIP_EXT}
+    for root, dirs, names in os.walk(PD):
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith('.')]
+        for n in names:
+            p = Path(root) / n
+            if p.suffix.lower() not in SKIP_EXT and not n.startswith('.'):
+                files.add(p.resolve())
+    for rel in [*(cfg.get('data') or []), *(cfg.get('scripts') or [])]:     # data / scripts may live outside the project
+        p = (PD / rel).resolve()
+        if p.exists():
+            files.add(p)
+    files = {p.resolve() for p in files if p.exists()}
+    text = {p: p.read_text(encoding='utf-8', errors='replace') for p in scene_files if p in files}
+    scene_files = set(text)
+    names = {p: top_names(t) for p, t in text.items()}
+    used = {p: idents(t) for p, t in text.items()}
+    shared = files - scene_files
+    # a scene file whose globals the project's own shared scripts (lib/, timeline.js) call is shared too
+    shared_used = set()
+    for p in shared:
+        if p.suffix == '.js' and PD in p.parents and p.stat().st_size < 2_000_000 and \
+                not ({'data', 'frames'} & set(p.relative_to(PD).parts[:-1])):
+            shared_used |= idents(p.read_text(encoding='utf-8', errors='replace'))
+    for p in list(scene_files):
+        if names[p] & shared_used:
+            scene_files.discard(p)
+            shared.add(p)
+    deps = {}
+    for p in scene_files:
+        if 'MV.scenes' in text[p]:                     # reaches into other scenes: depends on all of them
+            deps[p] = set(scene_files)
+            continue
+        d, todo = {p}, [p]
+        while todo:
+            q = todo.pop()
+            for o in scene_files - d:
+                if names[o] & used[q]:
+                    d.add(o)
+                    todo.append(o)
+        deps[p] = d
+    h = hashlib.sha1()
+    for p in sorted(shared):
+        h.update(f'{p.relative_to(KIT) if KIT in p.parents else p}={file_key(p)}\n'.encode())
+    shared_key = h.hexdigest()
+    keys = {}
+    for p, d in deps.items():
+        h = hashlib.sha1()
+        for q in sorted(d):
+            h.update(f'{q.name}={file_key(q)}\n'.encode())
+        keys[p] = h.hexdigest()
+    return shared_key, keys
+
+
+def plan_chunks(info, t0, n, fps):
+    """[(start frame, end frame, file name, shot names)] for the whole export."""
+    import hashlib
+    C = max(1, round(a.chunk * fps))
+    settings = dict(v=1, fps=fps, t0=round(t0, 6), C=C, samples=a.samples, shutter=a.shutter if a.samples > 1 else None,
+                    crf=a.crf, preset=a.preset, tune=a.tune, png=a.png, size=[info['width'], info['height']])
+    skey = hashlib.sha1(repr(sorted(settings.items())).encode()).hexdigest()[:10]
+    shared, per_file = input_keys(info)
+    out = []
+    for s in range(0, n, C):
+        e = min(n, s + C)
+        lo, hi = t0 + (s - 1) / fps, t0 + (e + 1) / fps          # a frame's motion-blur samples reach half a frame out
+        shots = [x for x in info['shots'] if x['from'] < hi and x['to'] > lo]
+        h = hashlib.sha1(shared.encode())
+        for x in shots:
+            p = url_path(x.get('src'))
+            h.update(f"|{x['scene']}={per_file.get(p, '-')}".encode())
+        out.append((s, e, f'{skey}-{s:06d}-{e:06d}-{h.hexdigest()[:12]}.mp4', [x['name'] for x in shots]))
+    return skey, out
+
+
 def video():
-    """Parallel export: N workers, each a browser + an x264 encoder on a contiguous run of frames."""
+    """Chunked, resumable export: a queue of short chunks, N workers (each a browser + an x264 encoder), kept chunks
+    reused; then the chunks are joined losslessly and muxed with the song."""
     from playwright.sync_api import sync_playwright
     fmt = ('image/png', 1) if a.png else ('image/jpeg', JPEG_Q)
     codec = 'png' if a.png else 'mjpeg'
@@ -311,15 +472,24 @@ def video():
     if n <= 0:
         first.close(); p0.stop()
         sys.exit('nothing to render: --to must be after --from')
-    nw = a.workers or auto_workers()
-    nw = max(1, min(nw, math.ceil(n / 48)))          # a worker costs a browser start-up: give each ≥ 2 s of frames
-    per = math.ceil(n / nw)
-    runs = [(k * per, min(n, (k + 1) * per)) for k in range(nw) if k * per < n]
 
     out = Path(a.out) if a.out else OUT / f"{cfg.get('title', 'mv').replace(' ', '-')}.mp4"
     out.parent.mkdir(parents=True, exist_ok=True)
-    segdir = out.parent / f'.{out.stem}.segs-{os.getpid()}'
-    segdir.mkdir()
+    cache = OUT / '.chunks'
+    cache.mkdir(parents=True, exist_ok=True)
+    for f in cache.glob('.tmp-*'):                       # half-written chunks of an export that was killed
+        try:
+            pid = int(f.name.split('-')[1])
+            os.kill(pid, 0)                              # still running (another export of this project): leave it
+        except (ValueError, IndexError, ProcessLookupError):
+            f.unlink(missing_ok=True)
+        except PermissionError:
+            pass
+    skey, chunks = plan_chunks(info, t0, n, fps)
+    have = {f.name for f in cache.glob(f'{skey}-*.mp4')}
+    todo = [c for c in chunks if a.fresh or c[2] not in have]
+    reused = len(chunks) - len(todo)
+
     # The frames are sRGB. Convert them with the BT.709 matrix and say so in the file: left untagged (or tagged with
     # JPEG's BT.601 matrix), players and upload transcoders that assume BT.709 for HD shift the colours (saturated
     # reds by ~9 levels).
@@ -328,27 +498,36 @@ def video():
     if a.tune:
         enc += ['-tune', a.tune]
 
-    done = [0] * len(runs)
+    nframes = sum(e - s for s, e, _, _ in todo)
+    done = [0]
     stop = threading.Event()
-    failures = []
-    procs = []
+    failures, procs, errored = [], [], set()
+    queue = list(todo)
+    tmp = lambda name: cache / f'.tmp-{os.getpid()}-{name}'
+
+    def drop_tmp():
+        for f in cache.glob(f'.tmp-{os.getpid()}-*'):
+            f.unlink(missing_ok=True)
 
     # Ctrl-C / SIGTERM: let every worker finish its current frame and close its browser (interrupting a Playwright
-    # call mid-flight can hang it); a second Ctrl-C quits at once.
+    # call mid-flight can hang it); finished chunks stay. A second Ctrl-C quits at once (finished chunks still stay).
     def on_signal(sig, frm):
         if stop.is_set():
             for ff in procs:
                 if ff.poll() is None:
                     ff.kill()
-            shutil.rmtree(segdir, ignore_errors=True)
+            drop_tmp()
             os._exit(130)
         failures.append('interrupted')
         stop.set()
-        print('\nstopping after the current frames… (Ctrl-C again to quit at once)', flush=True)
+        print('\nstopping after the current frames… (Ctrl-C again to quit at once; finished chunks are kept either way)', flush=True)
     handlers = {s: signal.signal(s, on_signal) for s in (signal.SIGINT, signal.SIGTERM)}
 
+    def next_chunk():
+        with lock:
+            return queue.pop(0) if queue and not stop.is_set() else None
+
     def work(k, pg=None, pw=None):
-        s, e = runs[k]
         ff = None
         try:
             if pg is None:
@@ -356,20 +535,29 @@ def video():
                 if stop.is_set():
                     return
                 pg = Page(pw, errors)
-            ff = subprocess.Popen(['ffmpeg', '-y', '-v', 'error', '-f', 'image2pipe', '-framerate', str(fps), '-c:v', codec, '-i', '-',
-                                   *enc, f'seg_{k:03d}.mp4'], stdin=subprocess.PIPE, cwd=segdir, start_new_session=True)
-            procs.append(ff)
-            for i in range(s, e):
+            while (c := next_chunk()) is not None:
+                s, e, name, _ = c
+                errs = []
+                ff = subprocess.Popen(['ffmpeg', '-y', '-v', 'error', '-f', 'image2pipe', '-framerate', str(fps), '-c:v', codec, '-i', '-',
+                                       *enc, '-f', 'mp4', str(tmp(name))], stdin=subprocess.PIPE, start_new_session=True)
+                procs.append(ff)
+                for i in range(s, e):
+                    if stop.is_set():
+                        break
+                    ff.stdin.write(pg.frame(t0 + (i + 0.5) / fps, a.samples, fmt, scene_errors, lock, errs))
+                    with lock:
+                        done[0] += 1
                 if stop.is_set():
-                    break
-                ff.stdin.write(pg.frame(t0 + (i + 0.5) / fps, a.samples, fmt, scene_errors, lock))
-                done[k] += 1
-            if stop.is_set():
-                ff.kill()
-                return
-            ff.stdin.close()
-            if ff.wait() != 0:
-                raise RuntimeError(f'ffmpeg failed on segment {k}')
+                    ff.kill(); ff.wait()
+                    tmp(name).unlink(missing_ok=True)
+                    return
+                ff.stdin.close()
+                if ff.wait() != 0:
+                    raise RuntimeError(f'ffmpeg failed on frames {s}–{e}')
+                os.replace(tmp(name), cache / name)
+                if errs:
+                    errored.add(name)                    # in this video, but not kept: the next export renders it again
+                ff = None
         except Exception as ex:  # noqa: BLE001 — report and stop the other workers
             if not stop.is_set():
                 failures.append(f'worker {k}: {ex}')
@@ -388,42 +576,78 @@ def video():
             except Exception:
                 pass
 
-    print(f"{info['title']}: {n} frames ({t0:.2f}–{t1:.2f} s @ {fps} fps), {len(runs)} worker{'s' if len(runs) > 1 else ''}, "
-          f"{'PNG' if a.png else 'JPEG'} frames{f', motion blur ×{a.samples}' if a.samples > 1 else ''}")
+    nw = max(1, min(a.workers or auto_workers(), len(todo))) if todo else 0
+    say = f"{info['title']}: {n} frames ({t0:.2f}–{t1:.2f} s @ {fps} fps) in {len(chunks)} chunks of {a.chunk:g} s"
+    if reused:
+        say += f'; {reused} already rendered and unchanged, kept'
+    if todo:
+        say += (f"; rendering {len(todo)} ({nframes} frames) with {nw} worker{'s' if nw > 1 else ''}, "
+                f"{'PNG' if a.png else 'JPEG'} frames{f', motion blur ×{a.samples}' if a.samples > 1 else ''}")
+    print(say)
+    if reused and todo and not a.fresh:
+        names = list(dict.fromkeys(x for c in todo for x in c[3]))
+        print('  the chunks to render show: ' + ', '.join(names[:16]) + (' …' if len(names) > 16 else ''))
     start = time.time()
     try:
-        # the other workers start their browsers while worker 0 (the page that's already loaded) renders on this thread
-        threads = [threading.Thread(target=work, args=(k,), daemon=True) for k in range(1, len(runs))]
-        for th in threads:
-            th.start()
-        ticker = threading.Thread(target=progress, args=(done, n, start, stop), daemon=True)
-        ticker.start()
-        work(0, first, p0)
-        for th in threads:
-            th.join()
-        stop.set()
-        print()
+        if todo:
+            # the other workers start their browsers while worker 0 (the page that's already loaded) renders on this thread
+            threads = [threading.Thread(target=work, args=(k,), daemon=True) for k in range(1, nw)]
+            for th in threads:
+                th.start()
+            ticker = threading.Thread(target=progress, args=(done, nframes, start, stop), daemon=True)
+            ticker.start()
+            work(0, first, p0)
+            for th in threads:
+                th.join()
+            stop.set()
+            print()
+        else:
+            first.close(); p0.stop()
         for sig_, h in handlers.items():
             signal.signal(sig_, h)
         if failures:
+            kept = sum((cache / c[2]).exists() for c in chunks)
             print('RENDER STOPPED:' if failures == ['interrupted'] else 'RENDER FAILED:', *failures, sep='\n  ')
+            again = 'run it again without --fresh' if a.fresh else 'run the same command again'
+            print(f'{kept} of {len(chunks)} chunks are done and kept in {cache}: {again} to go on from there')
             report_browser_errors(errors)
             sys.exit(130 if failures == ['interrupted'] else 1)
-        (segdir / 'list.txt').write_text(''.join(f"file 'seg_{k:03d}.mp4'\n" for k in range(len(runs))))
-        cmd = ['ffmpeg', '-y', '-v', 'error', '-f', 'concat', '-safe', '0', '-i', str(segdir / 'list.txt')]
+        lst = cache / f'.list-{os.getpid()}.txt'
+        lst.write_text(''.join(f"file '{(cache / c[2]).as_posix()}'\n" for c in chunks))
+        cmd = ['ffmpeg', '-y', '-v', 'error', '-f', 'concat', '-safe', '0', '-i', str(lst)]
         audio = (PD / info['audio']).resolve() if info.get('audio') else None
         fo = float(cfg.get('audioFadeOut', 0.2)) if a.t1 is None else 0.2  # project.audioFadeOut: seconds of fade at the end
         if audio and audio.exists() and not a.noaudio:
             cmd += ['-ss', f'{t0:.3f}', '-t', f'{n / fps:.3f}', '-i', str(audio), '-map', '0:v', '-map', '1:a',
                     '-af', f'afade=t=in:d=0.02,afade=t=out:st={max(0, n / fps - fo):.3f}:d={fo:.3f}', '-c:a', 'aac', '-b:a', '256k']
         cmd += ['-c:v', 'copy', '-movflags', '+faststart', str(out)]
-        subprocess.run(cmd, check=True)
+        try:
+            subprocess.run(cmd, check=True)
+        finally:
+            lst.unlink(missing_ok=True)
         el = time.time() - start
-        print(f'wrote {out}  ({el:.0f} s, {n / el:.1f} frames/s)')
+        print(f'wrote {out}  ({el:.0f} s' + (f', {nframes / el:.1f} frames/s' if nframes and el else '') + ')')
         report_browser_errors(errors)
+        # keep the cache tidy: chunks with a scene error are not reused; older versions of these chunks (same settings,
+        # same start, other inputs) are superseded
+        for name in errored:
+            (cache / name).unlink(missing_ok=True)
+        current = {c[2] for c in chunks}
+        starts = {c[2].split('-')[1] for c in chunks}
+        for f in cache.glob(f'{skey}-*.mp4'):
+            if f.name not in current and f.name.split('-')[1] in starts:
+                f.unlink(missing_ok=True)
+        if errored:
+            print(f'{len(errored)} chunk(s) had scene errors: they are in the video but not kept')
+        if a.clean:
+            shutil.rmtree(cache, ignore_errors=True)
+        else:
+            size = sum(f.stat().st_size for f in cache.glob('*.mp4'))
+            print(f'chunks kept in {cache} ({size / 1e6:.0f} MB): the next export re-renders only the shots you changed '
+                  f'(--fresh renders everything, --clean deletes them after the export)')
     finally:
         stop.set()
-        shutil.rmtree(segdir, ignore_errors=True)
+        drop_tmp()
 
 
 def progress(done, n, start, stop):

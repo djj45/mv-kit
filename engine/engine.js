@@ -11,9 +11,25 @@
 const MV = G.MV;
 
 MV.scenes = {};
-MV.scene = (name, def) => { MV.scenes[name] = def; return def; };
+// MV.sceneSrc: the file that defined each scene. render.py's export keys its cached chunks on it, so after an edit
+// only the chunks showing that scene render again.
+MV.sceneSrc = {};
+MV.scene = (name, def) => { MV.scenes[name] = def; MV.sceneSrc[name] = document.currentScript ? document.currentScript.src : null; return def; };
 let timelineFn = null;
 MV.timeline = fn => { timelineFn = fn; };
+/**
+ * Model sheets: a character (or prop) drawn in every view, mood and key pose on one page, the way an animation studio
+ * keeps a character on model. Register it next to the character's draw function (lib/):
+ *   MV.model('pip', { cell: [340, 420], guides: [150, 230], rows: [
+ *       { label: 'views', items: ['front', 'q', 'side', 'qback', 'back'].map(v => ({ label: v, pose: { view: v } })) },
+ *       { label: 'moods', items: ['neutral', 'happy', …].map(m => ({ label: m, pose: t => ACT.feel(m, t) })) } ],
+ *     draw(g, x, y, pose, t) { pip(g, x, y, 3.2, pose, t); } });
+ * draw gets the feet point (x, y) in its cell; a pose may be a function of t. guides = heights in px above the ground,
+ * drawn across each row: the head top / eye line must meet them in every view. `render.py model` writes
+ * out/model-<name>.png; the preview shows one with index.html?model=<name>.
+ */
+MV.models = {};
+MV.model = (name, def) => { MV.models[name] = def; return def; };
 const initHooks = [];
 MV.onInit = fn => { initHooks.push(fn); };
 /**
@@ -68,6 +84,12 @@ MV.setup = async function () {
     lyrics: L, audio: A, project: P, T0: P.from, T1: P.to,
     /** Start of the first word of the nth line containing q. */
     start: (q, nth = 0) => L.get(q, nth).words[0].start,
+    /** Start of the nth sung word q itself (a whole word: word('drop'), word('AGI')): for reads and actions on a word. */
+    word: (q, nth = 0) => {
+      const ws = L.findWords(q);
+      if (!ws[nth]) throw new Error(`timeline: word("${q}"${nth ? ', ' + nth : ''}) — no such sung word (${ws.length} found)`);
+      return ws[nth].start;
+    },
     /**
      * Cut on the beat at/before the first word of the nth line containing q (never after the word).
      * o.hold (default project.cutHold, else 0): the previous line's last word must stay this long (s) in the outgoing
@@ -96,9 +118,26 @@ MV.setup = async function () {
     const nx = MV.entries.filter(o => o.from > e.from + 1e-6 && o.from < e.to - 1e-6 && o.to >= e.to - 1e-6);
     e.until = nx.length ? Math.min(...nx.map(o => o.from)) : e.to;
   }
+  for (const e of MV.entries) e.reads = readsOf(e);
   for (const e of MV.entries) if (!MV.scenes[e.scene]) throw new Error(`timeline: unknown scene "${e.scene}" — add "${e.scene}" to "scenes" in project.js`);
   for (const [name, def] of Object.entries(MV.scenes)) if (def.init && MV.entries.some(e => e.scene === name)) await def.init.call(def, MV);
 };
+
+/**
+ * Reads: what the viewer has to understand in a shot, in order (ANIMATION_GUIDE "model the viewer", from
+ * github.com/JohnHeibel/ClaudeAnimationBase). A timeline entry may carry
+ *   reads: [[t, 'what the viewer gets', 'focus name'], [t2, '…', { focus: 'name', quick: true }], …]
+ * t is song time (use start('…') / the beat helpers, as for cuts). A read lasts until the next one starts (or the
+ * shot hands over): one read at a time. focus = the MV.focus name the eye should be on when it starts (qa checks it:
+ * read-unled). quick = a fast action the shot set up (anticipation): it may be shorter. MV.lint checks the timing.
+ */
+function readsOf(e) {
+  return (e.reads || []).map(r => {
+    if (!Array.isArray(r)) return { at: +r.at, what: String(r.what || ''), focus: r.focus || null, quick: !!r.quick };
+    const o = r[2] && typeof r[2] === 'object' ? r[2] : { focus: r[2] || null };
+    return { at: +r[0], what: String(r[1] || ''), focus: o.focus || null, quick: !!o.quick };
+  }).filter(r => isFinite(r.at)).sort((a, b) => a.at - b.at);
+}
 
 /**
  * Problems in the edit that no single frame shows: `render.py check` prints them, the preview marks them in red
@@ -113,6 +152,9 @@ MV.setup = async function () {
  *            (the next line comes < lineTail s after it, default 0.65): look at it with a strip
  *   cuttail  a hard cut comes less than cutTail s (default 6 frames) after a line's last word starts: the word
  *            flashes and is gone. cut(q, n, { hold }) / project.cutHold moves such cuts onto the next line's first word
+ *   read     a read (entry.reads) gets less than readMin s (default 0.6; quick reads readQuick, 0.25) before the next
+ *            read starts or the shot hands over: the viewer misses it. Or it lies outside its shot. Once any entry has
+ *            reads, a shot of 1.5 s or more without any is noted too
  */
 MV.lint = function () {
   const P = MV.project, A = MV.audio, L = MV.lyrics, E = MV.entries, fr = 1 / P.fps, out = [];
@@ -175,6 +217,21 @@ MV.lint = function () {
         add(c, 'cuttail', `cut to ${e.name} at ${f2(c)} s comes ${Math.round((c - last.start) * P.fps)} frame(s) after "${last.w}" (end of "${l.text}") starts: it flashes. ` +
           `Use cut(q, n, { hold: ${f2(cutTail)} }) or "cutHold" in project.js`);
     }
+  }
+  // reads: one at a time, each long enough to be found and understood
+  const readMin = o.readMin ?? 0.6, readQuick = o.readQuick ?? 0.25, anyReads = E.some(e => e.reads.length);
+  for (const e of E) {
+    const end = e.until ?? e.to, rs = e.reads;
+    if (e.to <= P.from || e.from >= P.to) continue;
+    if (anyReads && !rs.length && end - e.from >= 1.5)
+      add(e.from, 'read', `${e.name} (${f2(e.from)}–${f2(end)}): no reads — what must the viewer understand here, in what order? reads: [[t, 'what', 'focus'], …]`);
+    rs.forEach((r, k) => {
+      if (r.at < e.from - fr / 2 || r.at >= end) return add(r.at, 'read', `${e.name}: read "${r.what}" at ${f2(r.at)} s is outside the shot (${f2(e.from)}–${f2(end)})`);
+      const nxAt = k + 1 < rs.length ? rs[k + 1].at : Infinity, last = nxAt >= end, nx = last ? end : nxAt, span = nx - r.at, min = r.quick ? readQuick : readMin;
+      if (span < min - fr / 2)
+        add(r.at, 'read', `${e.name}: "${r.what}" gets ${Math.round(span * 1000)} ms before ${last ? 'the shot hands over' : `"${rs[k + 1].what}" starts`} — ` +
+          `under ${min} s the viewer misses it. Move the next read later, lengthen the shot, or drop a read${r.quick ? '' : " (a fast action the shot set up: { quick: true })"}`);
+    });
   }
   return out.sort((a, b) => a.t - b.t);
 };

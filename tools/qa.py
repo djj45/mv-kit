@@ -62,6 +62,13 @@ Every number comes from rendering the real frames (engine/qa.js does the measuri
   static         a shot whose picture (lyrics left out) barely changes from start to end, or stands still for more
                  than half of it (≥ 1.5 s): no camera move, no action. Every shot should keep moving, even if only a
                  slow push-in (kits/camera.js does one by default)
+  one-speed      a shot of 2.5 s or more whose picture (lyrics left out) moves at about one speed all the way: its
+                 fastest moment is less than 3× its slowest tenth (or less than 2 % of the picture apart). Nothing
+                 stands out and nothing holds: only a drift, or one constant rush. Fast actions, held meanings: let
+                 something happen (a hit, a turn, an arrival) against a calmer stretch, or cut the shot shorter.
+                 Sampled every 1/6 s, from the end of the cut-in (fadeIn, at least 0.35 s) to 0.2 s before the end
+  read-unled     a read (timeline reads, with a focus name) starts while the shot's subject (its last MV.focus) is
+                 something else: the eye is not where the read is. Report the read's object as the subject by then
   type-flat      the lyrics are all about the same size (largest / smallest < qa.typeRange, default 2.5)
   type-band      most lyrics sit in the same horizontal band, like subtitles (> 70 % in one third of the frame)
                  (both judged only when qa runs over the whole film: a --from / --to stretch prints the numbers only)
@@ -87,7 +94,7 @@ SEV = {'scene-error': 'error', 'lyric-hidden': 'error', 'box-cross': 'error', 'f
        'lyric-faint': 'warn', 'lyric-missing': 'warn', 'lyric-edge': 'warn', 'lyric-carryover': 'warn', 'lyric-handover': 'warn', 'lyric-overlap': 'warn',
        'lyric-covered': 'warn', 'lyric-cover': 'warn', 'lyric-touch': 'warn', 'text-touch': 'warn', 'text-cut': 'warn',
        'box-tight': 'warn', 'box-clash': 'warn',
-       'static': 'warn', 'type-flat': 'warn', 'type-band': 'warn'}
+       'static': 'warn', 'one-speed': 'warn', 'read-unled': 'warn', 'type-flat': 'warn', 'type-band': 'warn'}
 
 
 def run(pg, info, a, cfg, out_dir):
@@ -496,6 +503,45 @@ def run(pg, info, a, cfg, out_dir):
             a2, b2 = ts[best_end - best], ts[best_end]
             add('static', (a2 + b2) / 2, s['name'], f"{s['name']}: the picture stands still from {a2:.2f} to {b2:.2f} s ({frozen:.1f} s) — "
                 f"keep the camera moving (a slow push-in at least)", key=('static', s['name']), value=frozen)
+        else:
+            # fast and held: the speed (share of the picture that changes per 1/6 s) has to vary. A shot that only drifts,
+            # or rushes at one speed, never gives the eye a moment that stands out or a moment to read
+            lead = max(0.35, s.get('fadeIn') or 0)
+            ts2, x = [], a_ + lead
+            while x <= b_ - 0.2 + 1e-9:
+                ts2.append(round(x * fps) / fps)
+                x += 1 / 6
+            if b_ - a_ >= 2.5 and len(ts2) >= 8:
+                sp = page.evaluate('ts => MV_QA.motion(ts)', ts2)['steps']
+                q = sorted(sp)
+                low, top = q[int(0.1 * (len(q) - 1))], q[-1]
+                motion[-1]['speed'] = sp
+                if top < 3 * low or top - low < 0.02:
+                    k = sp.index(top)
+                    what = (f"only drifts ({top * 100:.1f} % of the picture changes per 1/6 s at most): nothing happens in {b_ - a_:.1f} s"
+                            if top < 0.03 else f"moves at one speed ({low * 100:.1f}–{top * 100:.1f} % per 1/6 s): nothing stands out, nothing holds")
+                    add('one-speed', ts2[k], s['name'], f"{s['name']} ({a_:.2f}–{b_:.2f}) {what} — give it an event (a hit, a turn, an arrival on a beat) "
+                        f"against a calmer stretch, or cut it shorter", key=('one-speed', s['name']), value=top / max(low, 1e-4))
+
+    # ------------------------------------------------------------ reads: the eye on the read when it starts
+    nreads = 0
+    for s in shots:
+        for rd in s.get('reads') or []:
+            if not rd.get('focus') or not (t0 <= rd['at'] < t1) or not (s['from'] - 1e-6 <= rd['at'] < (s.get('until') or s['to'])):
+                continue
+            nreads += 1
+            t = math.ceil((rd['at'] + 2.0 / fps) * fps - 1e-6) / fps      # two frames in: the read has begun
+            fr = page.evaluate('t => MV_QA.probe(t, [])', t)
+            mine = [f for f in fr['focus'] if f['entry'] == s['i']]
+            subj = mine[-1]['name'] if mine else None
+            if subj != rd['focus']:
+                named = any(f['name'] == rd['focus'] for f in mine)
+                add('read-unled', t, s['name'], f"read \"{rd['what']}\" starts at {rd['at']:.2f} with the eye on "
+                    + (f"\"{subj}\"" if subj else 'nothing (no MV.focus)') + f", not \"{rd['focus']}\""
+                    + (" (reported, but not last: the subject is the LAST MV.focus)" if named else " (not reported in this frame)")
+                    + " — lead the eye there first: make it the subject (camera, movement, light, a look)",
+                    box=[mine[-1]['x'] - 6, mine[-1]['y'] - 6, mine[-1]['x'] + 6, mine[-1]['y'] + 6] if mine else None,
+                    key=('read-unled', s['name'], rd['what']))
 
     # ------------------------------------------------------------ type
     type_note = ''
@@ -537,7 +583,7 @@ def run(pg, info, a, cfg, out_dir):
     max_crops = int(qc.get('crops', 60))
     from PIL import Image, ImageDraw
     for k, g in enumerate(items):
-        if k >= max_crops or (g['box'] is None and g['kind'] not in ('static', 'lyric-missing', 'lyric-cover')):
+        if k >= max_crops or (g['box'] is None and g['kind'] not in ('static', 'one-speed', 'read-unled', 'lyric-missing', 'lyric-cover')):
             continue
         png = pg.frame(g['t'], 1, ('image/png', 1), {})
         im = Image.open(io.BytesIO(png)).convert('RGB')
@@ -561,7 +607,7 @@ def run(pg, info, a, cfg, out_dir):
     warns = [g for g in items if g['sev'] == 'warn']
     lines = [f"# qa — {info['title']}", '',
              f"{len(times)} frames, {checked} sung words measured ({missing} not found as text, {unverified} drawn through an offscreen layer and not measurable, {skipped} one-letter words skipped), "
-             f"{len(motion)} shots checked for motion. {len(errs)} errors, {len(warns)} warnings. {time.time() - started:.0f} s.", '']
+             f"{len(motion)} shots checked for motion, {nreads} reads checked for focus. {len(errs)} errors, {len(warns)} warnings. {time.time() - started:.0f} s.", '']
     if type_note:
         lines += [f"Type: {type_note}.", '']
     lines += ['| | kind | time | shot | what | crop |', '|---|---|---|---|---|---|']
@@ -571,6 +617,12 @@ def run(pg, info, a, cfg, out_dir):
     lines += ['', '## Motion per shot (share of the picture that changes, lyrics left out)', '', '| shot | from | span | steps |', '|---|---|---|---|']
     for m in motion:
         lines.append(f"| {m['shot']} | {m['from']:.2f} | {m['span'] * 100:.1f} % | {' '.join(f'{x * 100:.1f}' for x in m['steps'])} |")
+    sped = [m for m in motion if m.get('speed')]
+    if sped:
+        lines += ['', '## Speed per shot (share of the picture that changes per 1/6 s; one-speed looks for contrast here)', '',
+                  '| shot | from | speed |', '|---|---|---|']
+        for m in sped:
+            lines.append(f"| {m['shot']} | {m['from']:.2f} | {' '.join(f'{x * 100:.0f}' for x in m['speed'])} |")
     (qdir / 'report.md').write_text('\n'.join(lines) + '\n')
     (qdir / 'qa.json').write_text(json.dumps({'findings': items, 'motion': motion, 'type': type_note,
                                               'counts': {'frames': len(times), 'words': checked, 'missing': missing}}, ensure_ascii=False, indent=1, default=list))

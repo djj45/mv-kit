@@ -19,11 +19,15 @@ MV.start = async function () {
   let lint = [];
   try { lint = MV.lint(); } catch (err) { console.error('MV.lint failed:', err); }
 
+  if (q.has('model')) { showModel(cv, q.get('model')); return; }
   if (q.has('export')) {
     document.body.classList.add('export');
     G.MV_EXPORT = {
+      model: name => { MV.lastError = null; return MV.modelSheet(name).toDataURL('image/png'); },
       info: { title: P.title, from: P.from, to: P.to, fps: P.fps, width: W, height: H, audio: P.audio, warnings: MV.warnings, lint,
-              shots: MV.entries.map(e => ({ name: e.name, scene: e.scene, from: e.from, to: e.to })) },
+              shots: MV.entries.map(e => ({ name: e.name, scene: e.scene, from: e.from, to: e.to, until: e.until, fadeIn: e.fadeIn || 0,
+                                             reads: e.reads, src: MV.sceneSrc[e.scene] || null })),
+              sceneSrc: MV.sceneSrc, models: Object.keys(MV.models) },
       frame(t, samples = 1, shutter = 0.5, type = 'image/png', quality = 0.95) { MV.lastError = null; MV.renderAt(ctx, t, { samples, shutter }); return cv.toDataURL(type, quality); },
       error: () => MV.lastError,
     };
@@ -107,7 +111,10 @@ function debugOverlay(g, t) {
   g.font = '600 22px ui-monospace, Menlo, monospace'; g.fillStyle = '#fff';
   const beat = A.beatAt(t), bar = A.barAt(t), sec = A.section(t), act = MV.activeAt(t);
   g.fillText(`t ${t.toFixed(3)}   beat ${beat.toFixed(2)}   bar ${(bar + 1).toFixed(2)}`, 36, 54);
+  const top = act[act.length - 1], rd = top ? top.reads.filter(r => r.at <= t).pop() : null;
   g.fillText(`shot ${act.map(e => e.name).join(' + ') || '—'}   section ${sec ? sec.name : '—'}`, 36, 84);
+  if (rd) { g.fillStyle = 'rgba(0,0,0,0.6)'; g.fillRect(20, 214, 620, 40); g.fillStyle = '#9fe0ff'; g.font = '600 20px ui-monospace, Menlo, monospace';
+            g.fillText(`read ${(t - rd.at).toFixed(1)} s: ${rd.what}${rd.focus ? ' → ' + rd.focus : ''}`.slice(0, 54), 36, 241); g.font = '600 22px ui-monospace, Menlo, monospace'; g.fillStyle = '#fff'; }
   // beat lamp + onset lamps
   const bp = 1 - (beat - Math.floor(beat));
   const lamp = (x, v, col, label) => { g.fillStyle = `rgba(${col},${0.15 + 0.85 * v})`; g.beginPath(); g.arc(x, 120, 14, 0, Math.PI * 2); g.fill(); g.fillStyle = '#ccc'; g.font = '16px ui-monospace, monospace'; g.fillText(label, x - 18, 152); };
@@ -120,6 +127,52 @@ function debugOverlay(g, t) {
     for (const w of l.words) { const p = MV.Lyrics.wordProgress(w, t); g.fillStyle = p <= 0 ? '#777' : p >= 1 ? '#fff' : '#ff8a3d'; g.fillText(w.w, x, y); x += g.measureText(w.w + ' ').width; }
   }
   g.restore();
+}
+
+/**
+ * A model sheet (MV.model): rows of labelled cells, each with the character drawn standing on a ground line, and the
+ * def's height guides across the row. Returns a canvas.
+ */
+MV.modelSheet = function (name) {
+  const def = MV.models[name];
+  if (!def) throw new Error(`no model "${name}" (registered: ${Object.keys(MV.models).join(', ') || 'none'})`);
+  const [cw, ch] = def.cell || [360, 420], rows = def.rows || [], lab = 170, top = 74, ground = def.ground ?? 0.8;
+  const cols = Math.max(1, ...rows.map(r => r.items.length)), t = def.t ?? MV.project.from;
+  const c = mk(lab + cols * cw, top + rows.length * ch), g = c.getContext('2d');
+  g.fillStyle = def.bg || MV.project.background || '#fff'; g.fillRect(0, 0, c.width, c.height);
+  const ink = def.ink || '#1A2233', faint = def.faint || 'rgba(26,34,51,0.28)';
+  g.fillStyle = ink; g.font = '600 30px system-ui, -apple-system, sans-serif'; g.textBaseline = 'middle';
+  g.fillText(`${name} — model sheet`, 24, top / 2);
+  rows.forEach((r, i) => {
+    const y0 = top + i * ch, gy = y0 + ch * ground;
+    g.strokeStyle = faint; g.lineWidth = 1;
+    g.beginPath(); g.moveTo(0, y0); g.lineTo(c.width, y0); g.stroke();
+    g.fillStyle = ink; g.font = '600 22px system-ui, -apple-system, sans-serif'; g.fillText(r.label || '', 20, y0 + 30);
+    g.setLineDash([8, 8]);
+    for (const h of def.guides || []) { g.beginPath(); g.moveTo(lab, gy - h); g.lineTo(c.width, gy - h); g.stroke(); }
+    g.setLineDash([]); g.strokeStyle = ink; g.lineWidth = 1.5;
+    g.beginPath(); g.moveTo(lab, gy); g.lineTo(lab + r.items.length * cw, gy); g.stroke();
+    r.items.forEach((it, j) => {
+      const x = lab + j * cw + cw / 2, tt = it.t ?? t, pose = typeof it.pose === 'function' ? it.pose(tt) : (it.pose || {});
+      g.save();
+      try { def.draw(g, x, gy, pose, tt); }
+      catch (err) { console.error(err); MV.lastError = `model ${name} / ${it.label}: ${err.stack || err}`; }
+      g.restore();
+      g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 1;
+      g.fillStyle = ink; g.font = '500 20px ui-monospace, Menlo, monospace'; g.textAlign = 'center';
+      g.fillText(it.label || '', x, y0 + ch - 22); g.textAlign = 'left';
+    });
+  });
+  return c;
+};
+
+function showModel(cv, name) {
+  try {
+    const sheet = MV.modelSheet(name || Object.keys(MV.models)[0]);
+    cv.width = sheet.width; cv.height = sheet.height; cv.getContext('2d').drawImage(sheet, 0, 0);
+    cv.style.cssText = 'max-width:100vw;height:auto;display:block;margin:auto';
+    document.body.style.background = '#222';
+  } catch (err) { fatal(err); }
 }
 
 function fatal(err) {
