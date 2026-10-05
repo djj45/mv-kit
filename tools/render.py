@@ -15,8 +15,11 @@
                                                             # text inside its boxes, the subject in frame, no dead shots
                                                             # (tools/qa.py; exit status 1 on errors; crops in out/qa/)
 
-Video: the frames are split into --workers contiguous segments, each rendered by its own headless browser and
-x264 encoder in parallel, then joined losslessly (no re-encode) and muxed with the song. Frames travel from the
+Video: the film is cut into chunks of --chunk seconds (4) that --workers headless browsers take from a queue, each
+piping its frames into its own x264 encoder; finished chunks are kept in out/.chunks (an export that stopped, or
+one after an edit, renders only what is missing or changed), then joined losslessly (no re-encode) and muxed with
+the song. The frame counter counts frames handed to the encoders: after the last one, x264 still holds tens of
+frames per chunk (seconds of work at 4K), shown as "encoding the frames x264 still holds". Frames travel from the
 page as JPEG (quality 0.98, ~47 dB against lossless; x264 at crf 18 loses more than that); --png sends lossless
 PNG frames instead (about 1.7x slower per frame). The video is BT.709, converted and tagged as such.
 
@@ -338,6 +341,8 @@ def auto_workers():
 #   · an export that stops (Ctrl-C, a crash, the laptop sleeps) picks up where it stopped: run the same command again;
 #   · after an edit, an export renders again only the chunks whose scenes (or the shared code) changed.
 # Frames depend on f.t only (CLAUDE.md), which is what makes a kept chunk identical to a fresh one.
+# When a chunk's last frame is in, its encoder still has its lookahead to encode (x264 slow: ~50 frames, plus B-frames
+# and frame threads); a finisher thread waits for it while the worker's browser goes on with the next chunk.
 
 SKIP_DIRS = {'out', 'stems', 'audio', '.git', 'node_modules', 'dreamina', '__pycache__'}
 SKIP_EXT = {'.md', '.txt', '.mp3', '.wav', '.m4a', '.flac', '.aac', '.ogg', '.mp4', '.mov', '.webm', '.mkv', '.py', '.pyc'}
@@ -516,6 +521,7 @@ def video():
     done = [0]
     stop = threading.Event()
     failures, procs, errored = [], [], set()
+    encoding = set()                                     # chunks whose encoder is running (being fed, or finishing)
     queue = list(todo)
     tmp = lambda name: cache / f'.tmp-{os.getpid()}-{name}'
 
@@ -541,8 +547,26 @@ def video():
         with lock:
             return queue.pop(0) if queue and not stop.is_set() else None
 
+    def finish(ff, s, e, name, errs):
+        """A chunk whose last frame is in: wait for its encoder and keep the file. x264 still holds tens of frames
+        then (its lookahead, B-frames and frame threads: seconds of work at 4K), so this runs beside the worker's next
+        chunk instead of holding up its browser."""
+        try:
+            if ff.wait() != 0:
+                raise RuntimeError(f'ffmpeg failed on frames {s}–{e}')
+            os.replace(tmp(name), cache / name)
+            if errs:
+                errored.add(name)                        # in this video, but not kept: the next export renders it again
+        except Exception as ex:  # noqa: BLE001 — report and stop the workers
+            if not stop.is_set():
+                failures.append(f'encoder of frames {s}–{e}: {ex}')
+            stop.set()
+        finally:
+            with lock:
+                encoding.discard(name)
+
     def work(k, pg=None, pw=None):
-        ff = None
+        ff, fin = None, None
         try:
             if pg is None:
                 pw = sync_playwright().start()
@@ -555,29 +579,35 @@ def video():
                 ff = subprocess.Popen(['ffmpeg', '-y', '-v', 'error', '-f', 'image2pipe', '-framerate', str(fps), '-c:v', codec, '-i', '-',
                                        *enc, '-f', 'mp4', str(tmp(name))], stdin=subprocess.PIPE, start_new_session=True)
                 procs.append(ff)
-                for i in range(s, e):
-                    if stop.is_set():
-                        break
+                with lock:
+                    encoding.add(name)
+                i = s
+                while i < e and not stop.is_set():
                     ff.stdin.write(pg.frame(t0 + (i + 0.5) / fps, a.samples, fmt, scene_errors, lock, errs))
+                    i += 1
                     with lock:
                         done[0] += 1
-                if stop.is_set():
+                if i < e:                                # stopped part-way: this chunk is dropped
                     ff.kill(); ff.wait()
                     tmp(name).unlink(missing_ok=True)
+                    with lock:
+                        encoding.discard(name)
                     return
-                ff.stdin.close()
-                if ff.wait() != 0:
-                    raise RuntimeError(f'ffmpeg failed on frames {s}–{e}')
-                os.replace(tmp(name), cache / name)
-                if errs:
-                    errored.add(name)                    # in this video, but not kept: the next export renders it again
+                ff.stdin.close()                         # every frame is in (kept even if a stop came meanwhile)
+                if fin:
+                    fin.join()                           # one chunk finishing per worker at most (x264 slow at 4K peaks ~2 GB)
+                fin = threading.Thread(target=finish, args=(ff, s, e, name, errs), daemon=True)
+                fin.start()
                 ff = None
         except Exception as ex:  # noqa: BLE001 — report and stop the other workers
             if not stop.is_set():
                 failures.append(f'worker {k}: {ex}')
             stop.set()
-            if ff and ff.poll() is None:
-                ff.kill()
+            if ff:
+                if ff.poll() is None:
+                    ff.kill()
+                with lock:
+                    encoding.discard(name)
         finally:
             try:
                 if pg:
@@ -589,6 +619,8 @@ def video():
                     pw.stop()
             except Exception:
                 pass
+            if fin:
+                fin.join()                               # after the browser is closed: the encoder gets its CPU
 
     nw = max(1, min(a.workers or auto_workers(), len(todo))) if todo else 0
     say = f"{info['title']}: {n} frames ({t0:.2f}–{t1:.2f} s @ {fps} fps) in {len(chunks)} chunks of {a.chunk:g} s"
@@ -608,12 +640,13 @@ def video():
             threads = [threading.Thread(target=work, args=(k,), daemon=True) for k in range(1, nw)]
             for th in threads:
                 th.start()
-            ticker = threading.Thread(target=progress, args=(done, nframes, start, stop), daemon=True)
+            ticker = threading.Thread(target=progress, args=(done, nframes, start, stop, lambda: len(encoding)), daemon=True)
             ticker.start()
             work(0, first, p0)
             for th in threads:
                 th.join()
             stop.set()
+            ticker.join(2)
             print()
         else:
             first.close(); p0.stop()
@@ -631,7 +664,9 @@ def video():
         cmd = ['ffmpeg', '-y', '-v', 'error', '-f', 'concat', '-safe', '0', '-i', str(lst)]
         audio = (PD / info['audio']).resolve() if info.get('audio') else None
         fo = float(cfg.get('audioFadeOut', 0.2)) if a.t1 is None else 0.2  # project.audioFadeOut: seconds of fade at the end
-        if audio and audio.exists() and not a.noaudio:
+        mux = bool(audio and audio.exists() and not a.noaudio)
+        print(f"joining {len(chunks)} chunk{'s' if len(chunks) > 1 else ''}{' and the song' if mux else ''} (no re-encode)…", flush=True)
+        if mux:
             cmd += ['-ss', f'{t0:.3f}', '-t', f'{n / fps:.3f}', '-i', str(audio), '-map', '0:v', '-map', '1:a',
                     '-af', f'afade=t=in:d=0.02,afade=t=out:st={max(0, n / fps - fo):.3f}:d={fo:.3f}', '-c:a', 'aac', '-b:a', '256k']
         cmd += ['-c:v', 'copy', '-movflags', '+faststart', str(out)]
@@ -664,18 +699,33 @@ def video():
         drop_tmp()
 
 
-def progress(done, n, start, stop):
-    last = -1
-    while not stop.is_set():
-        d = sum(done)
-        if d != last:
-            el = time.time() - start
+def progress(done, n, start, stop, busy):
+    """The frame counter (frames handed to the encoders); then, after the last one, the encoders finishing: x264
+    still holds tens of frames per chunk at that point (lookahead, B-frames, frame threads), seconds of work at 4K."""
+    last, shown = -1, 0.0
+    while True:
+        stopped = stop.is_set()
+        d, now = sum(done), time.time()
+        if d != last and (d >= n or stopped or now - shown >= 1):
+            el = now - start
             eta = el / d * (n - d) if d else 0
             print(f'\rframe {d}/{n}  {el:5.0f}s elapsed  ~{eta:4.0f}s left  ({d / el if el else 0:4.1f} frames/s)', end='', flush=True)
-            last = d
-        if d >= n:
-            return
-        time.sleep(1)
+            last, shown = d, now
+        if d >= n or stopped:
+            break
+        stop.wait(0.25)
+    if d < n:
+        return
+    t, shown = time.time(), None
+    print()
+    while (k := busy()) and not stop.is_set():
+        el = time.time() - t
+        if (k, int(el)) != shown:
+            print(f"\rencoding the frames x264 still holds: {k} chunk{'s' if k > 1 else ''} left  {el:3.0f}s   ", end='', flush=True)
+            shown = (k, int(el))
+        stop.wait(0.1)
+    if not busy():
+        print(f'\rencoding done {time.time() - t:.0f} s after the last frame' + ' ' * 24, end='', flush=True)
 
 
 if __name__ == '__main__':
