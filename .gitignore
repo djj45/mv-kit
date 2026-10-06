@@ -13,11 +13,12 @@ projects/*/audio/
 projects/*/lyrics.txt
 projects/*/data/lyrics*
 # …except lyrics that can be shared: the P(doom) example (anime-pdoom; roto-demo reads its data) and the
-# placeholder lines written for lumen-demo and solid-demo.
+# placeholder lines written for lumen-demo, solid-demo and field-demo.
 !projects/anime-pdoom/data/lyrics.js
 !projects/anime-pdoom/data/lyrics.json
 !projects/lumen-demo/data/lyrics.js
 !projects/solid-demo/data/lyrics.js
+!projects/field-demo/data/lyrics.js
 # pdoom-akari: the generated video clips (art/clips/, ~420 MB) and the frame packs made from them and from the stills
 # (frames/, ~560 MB) are too big for this repository: they stay on the machine that made them.
 projects/pdoom-akari/art/clips/

@@ -7,18 +7,29 @@ Every number comes from rendering the real frames (engine/qa.js does the measuri
                  colour as what is behind it. (vis = share of the word's own glyph pixels where the frame with the
                  lyrics differs from the frame without them.)
   lyric-faint    the same, between half and qa.vis (default 0.8) of the word shows
+  lyric-contrast a word, at the moment it is sung, stands out too little from what is right behind it: the luminance
+                 contrast (as WCAG: 21:1 white on black, 1:1 none) between its glyph pixels and the same pixels without
+                 the lyrics, taken on the solid strokes (upper quarter), is below qa.contrast (default 2:1). Light
+                 letters on a light wall, a colour on its own colour: the word differs from the picture (no
+                 lyric-hidden) but cannot be read. Clear / darken the picture behind it (lumen's text does by default),
+                 change its colour, or move it somewhere calmer
   lyric-missing  a sung word is not drawn as text anywhere in the frame (or is drawn some way qa cannot see,
                  e.g. rasterised into an offscreen canvas first: then this is only a note)
   lyric-edge     a sung word's ink comes closer than qa.margin (default 96 px) to the frame edge
   lyric-covered  a word sung earlier in the shot is still drawn, but something now covers it (less than half shows):
                  an object moved over it, or a punch-in pushed the picture under a screen-layer lyric (looked at on
-                 the shot's first frame and at 15 / 50 / 85 % of it)
+                 the shot's first frame, at 15 / 50 / 85 % of it, about every qa.every s (default 1) and on its last
+                 frame before the next shot comes in)
   lyric-touch    a sung word touches something of its own colour: more than qa.touch (7 %) of the thin ring around its
                  letters (0.06 em) is that colour in the frame without lyrics — a line through it, letters standing on
                  an axis or a plate's border, a door edge the camera pushed under a screen-layer lyric. Reads as struck
                  through or glued on. Also: drawing of ANY colour running into a word (a grey post or a green chart line through it, rays, dots,
                  a hand over it) — lines that stand out from the ground touching more than qa.cross (0.6 em) of the
                  letters' outline in all. A single line straight through a word touches about two line widths per letter.
+                 Measured when a word is sung AND on the looks of lyric-covered, for every word sung so far in the shot
+                 that is still up (the current line and earlier lines kept as history rows, dim ones too): that is how
+                 a drawing that grows into the words later (a line traced across the lyrics near the end of the shot)
+                 is caught.
                  Every touch finding (lyric-touch, text-touch) also says WHERE, so it can be fixed without opening the crop:
                  which side of the letters the contact is on, how far along it spans, its colour, its box in px, and the
                  nearest MV.focus
@@ -31,8 +42,8 @@ Every number comes from rendering the real frames (engine/qa.js does the measuri
                  drawn behind them on the screen layer or inside MV.lyric — against the bare picture (no lyrics). Reported
                  when it hides more than qa.cover (8 %) of the picture's detail (its edges) AND sits where the picture
                  is at least 1.5× as busy as average (on the drawing, not in its empty space); or hides 25 % or more;
-                 or sits on the shot's subject (last MV.focus) with picture under it. Looked at on the shot's first
-                 frame and at 15 / 50 / 85 %
+                 or sits on the shot's subject (last MV.focus) with picture under it. Looked at on the same frames as
+                 lyric-covered
   lyric-carryover  a shot draws (restyled, in its own layout) a line that was already sung before the shot began:
                  the previous shot's last line shows up again for the first frames of the next one. A line may cross
                  a cut only while it is still being sung (it has words after the cut); otherwise the new shot shows
@@ -63,10 +74,16 @@ Every number comes from rendering the real frames (engine/qa.js does the measuri
                  than half of it (≥ 1.5 s): no camera move, no action. Every shot should keep moving, even if only a
                  slow push-in (kits/camera.js does one by default)
   one-speed      a shot of 2.5 s or more whose picture (lyrics left out) moves at about one speed all the way: its
-                 fastest moment is less than 3× its slowest tenth (or less than 2 % of the picture apart). Nothing
-                 stands out and nothing holds: only a drift, or one constant rush. Fast actions, held meanings: let
-                 something happen (a hit, a turn, an arrival) against a calmer stretch, or cut the shot shorter.
-                 Sampled every 1/6 s, from the end of the cut-in (fadeIn, at least 0.35 s) to 0.2 s before the end
+                 fastest moment is less than 3× its slowest tenth, or less than qa.speedGap (60 px/s) above it; or
+                 nothing in it ever moves faster than qa.drift (40 px/s). Nothing stands out and nothing holds: only a
+                 drift, or one constant rush. Fast actions, held meanings: let something happen (a hit, a turn, an
+                 arrival) against a calmer stretch, or cut the shot shorter. Speed is how fast the picture's content
+                 MOVES (MV_QA.speed: 8 × 8 blocks at 1/8 size, lightly blurred so a dot cloud counts as its density,
+                 found again in the next look by normalised
+                 cross-correlation; design px per second, the mean over the blocks with something in them; a block
+                 that cannot be found again counts as the fastest): a flash, a fade or a glow pumping up and down is no
+                 motion, and a dot cloud rushing reads faster than the same cloud drifting. Sampled every 1/6 s, from
+                 the end of the cut-in (fadeIn, at least 0.35 s) to 0.2 s before the end
   read-unled     a read (timeline reads, with a focus name) starts while the shot's subject (its last MV.focus) is
                  something else: the eye is not where the read is. Report the read's object as the subject by then
   type-flat      the lyrics are all about the same size (largest / smallest < qa.typeRange, default 2.5)
@@ -77,7 +94,7 @@ Text drawn through MV.overlay (the screen layer, after the camera) is measured i
 a post filter remapped (warp), where the scene canvas itself cannot be measured.
 
 Errors (scene-error, lyric-hidden, box-cross, focus-out) make the command exit with status 1; the rest are warnings.
-project.qa tunes it: { "margin": 96, "vis": 0.8, "motion": 0.02, "typeRange": 2.5, "off": ["lyric-edge", ...] }.
+project.qa tunes it: { "margin": 96, "vis": 0.8, "contrast": 2, "every": 1, "motion": 0.02, "drift": 40, "speedGap": 60, "typeRange": 2.5, "off": ["lyric-edge", ...] }.
 Output: a summary here, out/qa/report.md, out/qa/qa.json, and for each finding a crop of the frame with the
 problem outlined (red: the text or point, yellow: the box it should sit in) in out/qa/. Open the crops.
 """
@@ -91,7 +108,7 @@ from collections import defaultdict
 from pathlib import Path
 
 SEV = {'scene-error': 'error', 'lyric-hidden': 'error', 'box-cross': 'error', 'focus-out': 'error',
-       'lyric-faint': 'warn', 'lyric-missing': 'warn', 'lyric-edge': 'warn', 'lyric-carryover': 'warn', 'lyric-handover': 'warn', 'lyric-overlap': 'warn',
+       'lyric-faint': 'warn', 'lyric-contrast': 'warn', 'lyric-missing': 'warn', 'lyric-edge': 'warn', 'lyric-carryover': 'warn', 'lyric-handover': 'warn', 'lyric-overlap': 'warn',
        'lyric-covered': 'warn', 'lyric-cover': 'warn', 'lyric-touch': 'warn', 'text-touch': 'warn', 'text-cut': 'warn',
        'box-tight': 'warn', 'box-clash': 'warn',
        'static': 'warn', 'one-speed': 'warn', 'read-unled': 'warn', 'type-flat': 'warn', 'type-band': 'warn'}
@@ -110,6 +127,9 @@ def run(pg, info, a, cfg, out_dir):
     cross_max = qc.get('cross', 0.6)
     cross_text = qc.get('crossText', 0.8)
     cover_max = qc.get('cover', 0.08)
+    contrast_min = qc.get('contrast', 2.0)
+    drift_max = qc.get('drift', 40)                  # px/s: a shot whose content never moves faster only drifts
+    speed_gap = qc.get('speedGap', 60)               # px/s: the fastest moment must be this much above the slowest tenth
     type_range = qc.get('typeRange', 2.5)
     fps = info['fps']
     W, H = info['width'], info['height']
@@ -156,27 +176,44 @@ def run(pg, info, a, cfg, out_dir):
             continue                                  # sung after the end of the film / of the range
         probes[t].append(w['i'])
     sung_at = {t: set(v) for t, v in probes.items()}  # the looks at the moment a word is sung
-    shot_looks = set()                                # the looks per shot (first frame, 15 / 50 / 85 %)
+    shot_looks = set()                                # the looks per shot (first frame, 15 / 50 / 85 %, every ~1 s, last frame)
+    older_at = defaultdict(set)                       # t -> words of this shot's earlier lines (still up as history rows?)
     by_line = defaultdict(list)
     for w in words:
         by_line[w['line']].append(w)
     starts = sorted((min(x['start'] for x in ws), l) for l, ws in by_line.items())
-    for s in shots:                                   # the first frame (what crosses the cut) + three looks per shot
+    every = qc.get('every', 1.0)
+    for s in shots:                                   # the first frame (what crosses the cut) + looks through the shot
         if s['to'] <= t0 or s['from'] >= t1:
             continue
         d = s['to'] - s['from']
+        nxt = shots[s['i'] + 1] if s['i'] + 1 < len(shots) else None
+        end = min(s['to'], nxt['from']) if nxt else s['to']
         first = math.ceil(s['from'] * fps - 1e-6) / fps
-        for t in [first] + [round((s['from'] + k * d) * fps) / fps for k in (0.15, 0.5, 0.85)]:
+        last = math.ceil(end * fps - 1e-6) / fps - 1.0 / fps
+        looks = [first] + [round((s['from'] + k * d) * fps) / fps for k in (0.15, 0.5, 0.85)]
+        # a drawing can grow into the words after the moments above (a line traced across the lyrics late in the shot):
+        # look about every `every` s as well, and on the shot's last frame before the next one comes in
+        for x in [s['from'] + j * every for j in range(1, int(d / every) + 1)] + [last]:
+            x = round(x * fps) / fps
+            if x == last or all(abs(x - y) >= 0.25 * every for y in looks):
+                looks.append(x)
+        for t in looks:
             if t0 <= t < t1 and s['from'] <= t < s['to']:
                 probes.setdefault(t, [])
                 shot_looks.add(t)
-                # and the words of this shot's line that were sung a while ago: still up, still readable? (an object
-                # moving over them, a punch-in pushing the world under a screen-layer lyric)
+                # and the words sung a while ago in this shot — its current line and the earlier lines still up as
+                # history rows: still readable (an object moving over them, a punch-in pushing the world under a
+                # screen-layer lyric), nothing grown into them since?
                 cur = [l for st, l in starts if st <= t]
-                if cur and line_last[cur[-1]] >= s['from'] - 1e-6:
-                    for w in by_line[cur[-1]]:
+                for l in reversed(cur):
+                    if line_last[l] < s['from'] - 1e-6:
+                        break                         # sung before the shot: not drawn here (lyric-carryover)
+                    for w in by_line[l]:
                         if w['start'] <= t - 0.3 and w['i'] not in probes[t]:
                             probes[t].append(w['i'])
+                            if l != cur[-1]:
+                                older_at[t].add(w['i'])
     times = sorted(probes)
     print(f"qa: {len(times)} frames to look at ({sum(len(v) for v in probes.values())} sung words, {len(shots)} shots)…")
 
@@ -215,7 +252,10 @@ def run(pg, info, a, cfg, out_dir):
                     f"short of the word" + _where((wr.get('geo') or {}).get('crossGeo'), r['focus'], 'word'),
                     box=wr['box'], key=('lyric-touch', sh, w['line']), value=-wr['cross'])
             if wr['i'] not in sung_at.get(t, ()):
-                # a later look at a word sung earlier in this shot: only "drawn but covered" counts (a line may leave)
+                # a later look at a word sung earlier in this shot: only "drawn but covered" counts (a line may leave).
+                # An earlier line's words (a history row, dimmed on purpose) are only looked at for touch, above
+                if wr['i'] in older_at.get(t, ()):
+                    continue
                 if r['solo'] and wr['status'] == 'ok' and wr['vis'] < 0.5 and wr['off'] < 0.15:
                     add('lyric-covered', t, sh, f"\"{w['w']}\" (sung at {w['start']:.2f}) is still drawn at {t:.2f} but only {round(wr['vis'] * 100)} % of it "
                         f"shows: something moved over it, or the camera pushed the picture under it (a screen-layer lyric over a "
@@ -243,6 +283,13 @@ def run(pg, info, a, cfg, out_dir):
             elif vis < vis_ok:
                 add('lyric-faint', t, sh, f"\"{w['w']}\" shows {round(vis * 100)} % of its glyphs while sung: {why}", box=box,
                     key=('lyric-faint', sh, w['i']), value=vis)
+            con = wr.get('con')
+            if vis >= 0.5 and offf < 0.15 and con is not None and con < contrast_min:
+                add('lyric-contrast', t, sh, f"\"{w['w']}\" is sung at {con:.1f}:1 contrast with what is right behind it (keep ≥ {contrast_min:g}:1; "
+                    f"white on black is 21:1): its letters differ from the picture, but the eye cannot read them — light letters "
+                    f"on a light wall, a colour on its own colour. Clear or darken the picture behind the words (a soft patch of the "
+                    f"background, lumen's text does it by default), change the words' colour, or move them to a calmer place",
+                    box=box, key=('lyric-contrast', sh, w['line']), value=con)
             if vis >= 0.5 and offf < 0.15:
                 gap = min(box[0], box[1], W - box[2], H - box[3])
                 if gap < margin:
@@ -504,24 +551,27 @@ def run(pg, info, a, cfg, out_dir):
             add('static', (a2 + b2) / 2, s['name'], f"{s['name']}: the picture stands still from {a2:.2f} to {b2:.2f} s ({frozen:.1f} s) — "
                 f"keep the camera moving (a slow push-in at least)", key=('static', s['name']), value=frozen)
         else:
-            # fast and held: the speed (share of the picture that changes per 1/6 s) has to vary. A shot that only drifts,
-            # or rushes at one speed, never gives the eye a moment that stands out or a moment to read
+            # fast and held: the speed has to vary. A shot that only drifts, or rushes at one speed, never gives the eye
+            # a moment that stands out or a moment to read. Speed = how fast the picture's content moves (MV_QA.speed:
+            # block matching, design px per second), not how much of it changes: a flash, a fade or a glow pumping up
+            # and down is no motion, and a dot cloud rushing reads faster than the same cloud drifting
             lead = max(0.35, s.get('fadeIn') or 0)
             ts2, x = [], a_ + lead
             while x <= b_ - 0.2 + 1e-9:
                 ts2.append(round(x * fps) / fps)
                 x += 1 / 6
             if b_ - a_ >= 2.5 and len(ts2) >= 8:
-                sp = page.evaluate('ts => MV_QA.motion(ts)', ts2)['steps']
+                sp = page.evaluate('ts => MV_QA.speed(ts)', ts2)
                 q = sorted(sp)
                 low, top = q[int(0.1 * (len(q) - 1))], q[-1]
                 motion[-1]['speed'] = sp
-                if top < 3 * low or top - low < 0.02:
+                if top < drift_max or top < 3 * low or top - low < speed_gap:
                     k = sp.index(top)
-                    what = (f"only drifts ({top * 100:.1f} % of the picture changes per 1/6 s at most): nothing happens in {b_ - a_:.1f} s"
-                            if top < 0.03 else f"moves at one speed ({low * 100:.1f}–{top * 100:.1f} % per 1/6 s): nothing stands out, nothing holds")
+                    what = (f"only drifts (its content moves {top:.0f} px/s at most): nothing happens in {b_ - a_:.1f} s"
+                            if top < drift_max else f"moves at one speed ({low:.0f}–{top:.0f} px/s): nothing stands out, nothing holds")
                     add('one-speed', ts2[k], s['name'], f"{s['name']} ({a_:.2f}–{b_:.2f}) {what} — give it an event (a hit, a turn, an arrival on a beat) "
-                        f"against a calmer stretch, or cut it shorter", key=('one-speed', s['name']), value=top / max(low, 1e-4))
+                        f"against a calmer stretch, or cut it shorter. (Speed is how fast things move, not how bright: a flash or a "
+                        f"fade does not count)", key=('one-speed', s['name']), value=top / max(low, 1.0))
 
     # ------------------------------------------------------------ reads: the eye on the read when it starts
     nreads = 0
@@ -619,10 +669,10 @@ def run(pg, info, a, cfg, out_dir):
         lines.append(f"| {m['shot']} | {m['from']:.2f} | {m['span'] * 100:.1f} % | {' '.join(f'{x * 100:.1f}' for x in m['steps'])} |")
     sped = [m for m in motion if m.get('speed')]
     if sped:
-        lines += ['', '## Speed per shot (share of the picture that changes per 1/6 s; one-speed looks for contrast here)', '',
-                  '| shot | from | speed |', '|---|---|---|']
+        lines += ['', '## Speed per shot (how fast the picture moves, design px per second, every 1/6 s — flashes and fades are not '
+                  'motion; one-speed looks for contrast here)', '', '| shot | from | speed |', '|---|---|---|']
         for m in sped:
-            lines.append(f"| {m['shot']} | {m['from']:.2f} | {' '.join(f'{x * 100:.0f}' for x in m['speed'])} |")
+            lines.append(f"| {m['shot']} | {m['from']:.2f} | {' '.join(f'{x:.0f}' for x in m['speed'])} |")
     (qdir / 'report.md').write_text('\n'.join(lines) + '\n')
     (qdir / 'qa.json').write_text(json.dumps({'findings': items, 'motion': motion, 'type': type_note,
                                               'counts': {'frames': len(times), 'words': checked, 'missing': missing}}, ensure_ascii=False, indent=1, default=list))

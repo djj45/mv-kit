@@ -42,6 +42,8 @@
 //          lmAmbient (into lmGlow(): drifting soft light for sparse, quiet shots — keeps them off qa's static list),
 //          lmLabel (引线标注; 纸面模式下自动在字后垫底色), lmBig (宽字距大字: decode 乱码解出 / reveal / glitch), lmCode (带行号的代码块, 逐字打出),
 //          lmCodeBg (满屏暗代码纹理; lmSource('scene') = 镜头自己的源码), lmCount / lmFmt (数字滚动), lmFlick (通电闪烁).
+//          Each of them first clears its own place (a soft patch of the empty frame behind its rows, so lines and clouds
+//          fade out in front of the words): o.clear (false | 0..1), project.lumen.clear; lmClear(g, rects, o) for your own text.
 // Post:    a scene returning { glitch: 0..1 } tears the whole frame (bands + RGB split); timeline wipe 'glitch'.
 //
 // Depth: kits/solid.js (listed after lumen) adds lit / glass meshes and raymarched shaders into this same light, with a
@@ -458,7 +460,7 @@ function lmBegin(pal = 'ice', over) {
   glInit();
   const base = typeof pal === 'string' ? LUMEN[pal] || LUMEN.ice : { ...LUMEN.ice, ...pal };
   S.pal = over ? { ...base, ...over } : base;
-  S.glowUsed = false;
+  S.glowUsed = false; S.end = null;
   gl.bindFramebuffer(gl.FRAMEBUFFER, LIGHT.fb); gl.viewport(0, 0, PW, PH);
   gl.clearColor(0, 0, 0, 1); gl.clearDepth(1); gl.clear(gl.COLOR_BUFFER_BIT | (LIGHT.depth ? gl.DEPTH_BUFFER_BIT : 0));
   for (const fn of BEGIN) fn(S.pal);
@@ -570,6 +572,7 @@ function lmEnd(g, o = {}) {
   gl.uniform3fv(u.uBg, bg); gl.uniform3fv(u.uBg2, bg2);
   gl.uniform1f(u.uMode, ink ? 1 : 0); gl.uniform1f(u.uBloomK, bk); gl.uniform1f(u.uExp, o.exposure ?? p.exposure);
   gl.uniform1f(u.uCA, o.ca ?? p.ca); gl.uniform1f(u.uLens, screen ? 0 : o.lens ?? p.lens); gl.uniform1f(u.uSeed, (o.seed ?? 0) + 1);
+  S.end = { bg, bg2, lens: screen ? 0 : o.lens ?? p.lens };              // the empty frame's colour, for lmClear
   fullscreen(null, PW, PH);
   g.save(); g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = o.alpha ?? 1;
   if (o.blend) g.globalCompositeOperation = o.blend;
@@ -785,6 +788,63 @@ function lmMorph(A, B, k, o = {}) {
 
 // ---------------------------------------------------------------- text
 function glowText(g, color, blur) { if (S.pal.mode !== 'ink' && blur > 0) { g.shadowColor = color; g.shadowBlur = blur; } }
+
+// The words keep their place clear. Text is drawn after lmEnd, onto the finished light, so nothing the light drew
+// could know where the words would be: a field line that grows into the lyrics late in the shot, dust drifting under
+// the readouts, a raymarched wall behind the terminal (white words on a white wall). So each text helper first clears
+// its own place: a soft patch in the colour lmEnd left there when nothing is lit (the palette's bg / bg2 gradient and
+// the lens darkening; the paper in ink mode), laid over the rows it is about to fill. On empty frame it cannot be seen;
+// whatever passes behind the words fades out just before it reaches them — every frame, however late it arrives.
+// o.clear on lmTerminal / lmCaption / lmHud / lmSection / lmCode / lmTag: false = off, 0..1 = how much of the picture
+// under the words is cleared (default 0.9; project.lumen.clear sets it for a whole project).
+const CLEAR = { alpha: 0.9, steps: 16 };
+function clearAmt(o) {
+  if (o.clear === false) return 0;
+  if (typeof o.clear === 'number') return clamp(o.clear);
+  const p = MV.project && MV.project.lumen;
+  return p && p.clear != null ? clamp(+p.clear) : CLEAR.alpha;
+}
+/** The empty frame as lmEnd composites it (FS_COMP with no light): a radial gradient in design px. */
+function emptyFrame(g) {
+  const e = S.end || { bg: rgb(S.pal.bg), bg2: rgb(S.pal.bg2), lens: S.pal.lens }, R = 1.15 * H;
+  const gr = g.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, R);
+  for (let i = 0; i <= 16; i++) {
+    const r = i / 16 * 1.15, k = smoothstep(0, 0.9, r), l = 1 - e.lens * smoothstep(0.45, 1.15, r);
+    gr.addColorStop(i / 16, `rgb(${[0, 1, 2].map(c => Math.round(255 * clamp((e.bg2[c] + (e.bg[c] - e.bg2[c]) * k) * l))).join(',')})`);
+  }
+  return gr;
+}
+/**
+ * Clear the picture behind text before drawing it: rects [[x0, y0, x1, y1], …] (the text's ink boxes, in g's current
+ * coordinates) grown by o.pad and feathered over o.feather design px, alpha o.alpha (× g.globalAlpha) in the middle.
+ * The rows are one shape (overlaps are not cleared twice). o.lyric: it is part of a lyric (qa counts it with the words).
+ */
+function lmClear(g, rects, o = {}) {
+  const a = clamp((o.alpha ?? CLEAR.alpha) * g.globalAlpha);
+  if (a < 0.003 || !rects.length) return;
+  const pad = o.pad ?? 6, fe = Math.max(1, o.feather ?? 14), N = Math.round(CLEAR.steps * (MV.scale || 1)), M = g.getTransform();   // 4K: twice the steps, as smooth
+  const R = rects.map(([x0, y0, x1, y1]) => {
+    const q = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map(([x, y]) => [M.a * x + M.c * y + M.e, M.b * x + M.d * y + M.f]), k = Math.sqrt(Math.abs(M.a * M.d - M.b * M.c)) || 1;
+    return [Math.min(...q.map(p => p[0])), Math.min(...q.map(p => p[1])), Math.max(...q.map(p => p[0])), Math.max(...q.map(p => p[1])), k];
+  });
+  const draw = () => {
+    g.save(); g.setTransform(1, 0, 0, 1, 0, 0);
+    g.shadowBlur = 0; g.shadowColor = 'rgba(0,0,0,0)'; g.filter = 'none'; g.globalCompositeOperation = 'source-over';
+    g.fillStyle = emptyFrame(g);
+    // N nested shapes, outermost first: inside the j outermost ones the cleared share is C_j, which eases (smoothstep)
+    // from nothing at the edge of the feather to `a` at pad px from the ink — a soft falloff, not a plate
+    let prev = 0;
+    for (let j = 1; j <= N; j++) {
+      const C = a * (1 - smoothstep(0, 1, 1 - j / N)), e = pad + fe * (1 - (j - 0.5) / N);
+      g.globalAlpha = 1 - (1 - C) / (1 - prev); prev = C;
+      g.beginPath();
+      for (const [x0, y0, x1, y1, k] of R) { const ek = e * k; g.roundRect(x0 - ek, y0 - ek, x1 - x0 + 2 * ek, y1 - y0 + 2 * ek, ek); }
+      g.fill();
+    }
+    g.restore();
+  };
+  if (o.lyric && MV.lyric) MV.lyric(draw); else draw();
+}
 /** 0 → 1 with a power-on flicker over dur seconds from t0. */
 function lmFlick(t, t0, dur = 0.3, seed = 0) {
   if (t < t0) return 0; if (t >= t0 + dur) return 1;
@@ -821,7 +881,7 @@ function shotLines(f, from, lead = 0) {
  * one fillText per word: that is what qa measures — a word typed letter by letter is half drawn when qa looks at it
  * (lyric-hidden). A line is committed (a fresh prompt appears) o.commit s after it ends.
  * o: x, y (baseline of the live row), size, rows, gap, prompt, since (default f.from: lines sung before the shot are
- * not shown), status (string | fn(f)), hold (keep last line live), pal, glow, weight.
+ * not shown), status (string | fn(f)), hold (keep last line live), pal, glow, weight, clear (see lmClear).
  */
 function lmTerminal(g, f, o = {}) {
   const pal = palOf(o.pal), t = f.t, lyr = f.lyrics, L = lyr.lines;
@@ -836,8 +896,19 @@ function lmTerminal(g, f, o = {}) {
     for (let k = idx.length - 2; k >= 0 && hist.length < rows - 1; k--) hist.push(L[idx[k]].text);
   }
   const sc = liveStart == null ? 0 : (1 - prog(t, liveStart, liveStart + 0.14, ease.outCubic)) * lh;
+  const status = o.status ? (typeof o.status === 'function' ? o.status(f) : o.status) : null;
   g.save(); g.font = `${o.weight ?? 500} ${size}px ${MONO}`; g.textBaseline = 'alphabetic';
   const pw = g.measureText(pr).width, sp = g.measureText(' ').width;
+  const ca = clearAmt(o);
+  if (ca > 0) {                                                         // the rows' place: history, the whole live line, the cursor
+    const asc = size * 0.88, desc = size * 0.3, rr = [];
+    hist.slice(0, rows - 1).forEach((s, r) => { const yy = y - (r + 1) * lh + sc; rr.push([x, yy - asc, x + pw + g.measureText(s).width, yy + desc]); });
+    let lw = 0;
+    if (live) for (const tk of lyr.tokens(live)) lw += g.measureText(tk.text).width + (tk.join ? 0 : sp);
+    rr.push([x, y + sc - asc, x + pw + lw + size * 0.72, y + sc + desc]);
+    if (status) { g.font = `${size * 0.62}px ${MONO}`; rr.push([x, y + lh * 1.25 - size * 0.55, x + g.measureText(`· ${status}`).width, y + lh * 1.25 + size * 0.2]); g.font = `${o.weight ?? 500} ${size}px ${MONO}`; }
+    lmClear(g, rr, { alpha: ca, pad: size * 0.15, feather: size * 1.1, lyric: true });
+  }
   hist.slice(0, rows - 1).forEach((s, r) => {
     const a = [0.5, 0.26, 0.14][r] ?? 0.1;
     g.fillStyle = lmCss('dim', a * 1.6, pal); g.fillText(pr, x, y - (r + 1) * lh + sc);
@@ -859,13 +930,10 @@ function lmTerminal(g, f, o = {}) {
   }
   const on = typing || f.beatPhase < 0.5;
   if (on) { g.fillStyle = lmCss('accent', 0.95, pal); g.fillRect(cx + (typed ? size * 0.08 : 0), ya - size * 0.82, size * 0.56, size * 1.04); }
-  if (o.status) {
-    const s = typeof o.status === 'function' ? o.status(f) : o.status;
-    if (s) {
-      const spin = '·✢✳✶✻✽'[Math.floor(t * 8) % 6];
-      g.font = `${size * 0.62}px ${MONO}`; g.fillStyle = lmCss('accent', 0.85, pal);
-      g.fillText(`${spin} ${s}`, x, y + lh * 1.25);
-    }
+  if (status) {
+    const spin = '·✢✳✶✻✽'[Math.floor(t * 8) % 6];
+    g.font = `${size * 0.62}px ${MONO}`; g.fillStyle = lmCss('accent', 0.85, pal);
+    g.fillText(`${spin} ${status}`, x, y + lh * 1.25);
   }
   g.restore();
 }
@@ -875,7 +943,7 @@ function lmTerminal(g, f, o = {}) {
  * enough that it reads as "there" when sung) with a little rise at its own start; the line fades o.hold s after it
  * ends (or when the next one starts). One fillText per word, tracking via letterSpacing (qa measures whole words).
  * o: y, size, font, weight, track (em), color, hold, fade, fadeIn, lead (dim preview ≤ 0.3 s), since (default f.from),
- * pal, glow.
+ * pal, glow, clear (see lmClear).
  */
 function lmCaption(g, f, o = {}) {
   const pal = palOf(o.pal), t = f.t, lyr = f.lyrics, L = lyr.lines, lead = Math.min(o.lead || 0, 0.3);
@@ -891,9 +959,11 @@ function lmCaption(g, f, o = {}) {
   const ws = toks.map(tk => g.measureText(tk.text).width);
   const total = ws.reduce((s, w, i) => s + w + (toks[i].join ? 0 : sp), 0) - track;
   let cx = W / 2 - total / 2;
+  const alphaOf = tk => { const a = prog(t, tk.start, tk.start + (o.fadeIn ?? 0.16), ease.outCubic); return a <= 0 && lead && t >= tk.start - lead ? 0.15 : a; };
+  const ca = clearAmt(o) * la * Math.max(0, ...toks.map(alphaOf));     // the line's place clears as its first word comes up
+  if (ca > 0) lmClear(g, [[cx, y - size * 0.92, cx + total, y + size * 0.3 + 8]], { alpha: ca, pad: size * 0.15, feather: size * 1.1, lyric: true });
   toks.forEach((tk, i) => {
-    let a = prog(t, tk.start, tk.start + (o.fadeIn ?? 0.16), ease.outCubic);
-    if (a <= 0 && lead && t >= tk.start - lead) a = 0.15;
+    const a = alphaOf(tk);
     if (a > 0) {
       g.save(); g.globalAlpha = a * la;
       glowText(g, lmCss(o.color ?? 'fg', 0.35, pal), o.glow ?? size * 0.35);
@@ -930,12 +1000,25 @@ function lmAmbient(gl, f, o = {}) {
 
 /**
  * The instrument frame: thin corner brackets, top-left "id  time  name", top-right key / value readouts (o.rows:
- * [[label, value], …] or fn(f) → rows), bottom-right footnote (o.foot). o.on (0..1, e.g. lmFlick) fades it.
+ * [[label, value], …] or fn(f) → rows), bottom-right footnote (o.foot). o.on (0..1, e.g. lmFlick) fades it; o.clear.
  */
 function lmHud(g, f, o = {}) {
   const pal = palOf(o.pal), m = o.margin ?? 44, on = o.on ?? 1;
   if (on <= 0) return;
   g.save(); g.globalAlpha = on;
+  const head = [o.id ?? '', (o.time ?? f.t).toFixed(1).padStart(5, '0'), o.name ?? ''].filter(s => s !== '').join('   ');
+  const rows = typeof o.rows === 'function' ? o.rows(f) : o.rows;
+  const ca = clearAmt(o);
+  if (ca > 0) {                                                         // the head, the readout rows and the footnote keep clear
+    const rr = [];
+    g.font = `14px ${MONO}`; rr.push([m + 36, m + 7 - 9, m + 36 + g.measureText(head).width, m + 7 + 9]);
+    if (o.foot) { const w = g.measureText(o.foot).width; rr.push([W - m - 36 - w, H - m - 7 - 9, W - m - 36, H - m - 7 + 9]); }
+    if (rows) {
+      g.font = `15px ${MONO}`;
+      rows.forEach(([k, v], i) => { const yy = m + 104 + i * 23.5; rr.push([W - m - 376, yy - 10, Math.max(W - m - 376 + g.measureText(String(k)).width, W - m - 266 + g.measureText(String(v)).width), yy + 10]); });
+    }
+    lmClear(g, rr, { alpha: ca, pad: 3, feather: 18 });
+  }
   if (o.corners !== false) {
     g.strokeStyle = lmCss('dim', 0.75, pal); g.lineWidth = 1.5; const L = 26;
     for (const [cx, cy, sx, sy] of [[m, m, 1, 1], [W - m, m, -1, 1], [m, H - m, 1, -1], [W - m, H - m, -1, -1]]) {
@@ -943,9 +1026,7 @@ function lmHud(g, f, o = {}) {
     }
   }
   g.font = `14px ${MONO}`; g.textBaseline = 'middle';
-  const head = [o.id ?? '', (o.time ?? f.t).toFixed(1).padStart(5, '0'), o.name ?? ''].filter(s => s !== '').join('   ');
   g.fillStyle = lmCss('dim', 0.95, pal); g.fillText(head, m + 36, m + 7);
-  const rows = typeof o.rows === 'function' ? o.rows(f) : o.rows;
   if (rows) {
     g.font = `15px ${MONO}`;
     rows.forEach(([k, v], i) => {
@@ -958,12 +1039,20 @@ function lmHud(g, f, o = {}) {
   g.restore();
 }
 
-/** Chapter tag, top left: "01 / 06 ——— title  sub". o: x, y, alpha, pal. */
+/** Chapter tag, top left: "01 / 06 ——— title  sub". o: x, y, alpha, pal, clear. */
 function lmSection(g, i, n, title, sub, o = {}) {
   const pal = palOf(o.pal), x = o.x ?? 96, y = o.y ?? 102;
   g.save(); g.globalAlpha = o.alpha ?? 1; g.textBaseline = 'middle';
   g.font = `16px ${MONO}`; g.letterSpacing = '4px';
   const idx = `${String(i).padStart(2, '0')} / ${String(n).padStart(2, '0')}`;
+  const ca = clearAmt(o);
+  if (ca > 0) {                                                         // measure the whole tag first: its place keeps clear
+    let w = g.measureText(idx).width + 18 + 76;
+    g.letterSpacing = '3px'; g.font = `400 22px ${SANS}`; w += g.measureText(title).width;
+    if (sub) { w += 22; g.font = `15px ${MONO}`; g.letterSpacing = '5px'; w += g.measureText(sub).width; }
+    lmClear(g, [[x, y - 13, x + w, y + 13]], { alpha: ca, pad: 3, feather: 20 });
+    g.font = `16px ${MONO}`; g.letterSpacing = '4px';
+  }
   g.fillStyle = lmCss('accent', 0.95, pal); g.fillText(idx, x, y);
   let cx = x + g.measureText(idx).width + 18;
   g.strokeStyle = lmCss('dim', 0.9, pal); g.lineWidth = 1; g.beginPath(); g.moveTo(cx, y); g.lineTo(cx + 60, y); g.stroke(); cx += 76;
@@ -973,13 +1062,15 @@ function lmSection(g, i, n, title, sub, o = {}) {
   g.restore();
 }
 
-/** Small wide-tracked label ("1958 · PERCEPTRON"). o: size, track (em), color, align, alpha, font. */
+/** Small wide-tracked label ("1958 · PERCEPTRON"). o: size, track (em), color, align, alpha, font, clear. */
 function lmTag(g, text, x, y, o = {}) {
   const pal = palOf(o.pal), size = o.size ?? 15;
   g.save(); g.globalAlpha = o.alpha ?? 1; g.font = `${o.weight ?? 400} ${size}px ${o.font || MONO}`; g.textBaseline = 'middle';
   g.letterSpacing = `${(o.track ?? 0.3) * size}px`; g.fillStyle = lmCss(o.color ?? 'dim', 1, pal);
-  const w = g.measureText(text).width - (o.track ?? 0.3) * size;
-  g.fillText(text, o.align === 'left' ? x : o.align === 'right' ? x - w : x - w / 2, y);
+  const w = g.measureText(text).width - (o.track ?? 0.3) * size, x0 = o.align === 'left' ? x : o.align === 'right' ? x - w : x - w / 2;
+  const ca = clearAmt(o);
+  if (ca > 0) lmClear(g, [[x0, y - size * 0.62, x0 + w, y + size * 0.62]], { alpha: ca, pad: size * 0.2, feather: size * 1.2 });
+  g.fillText(text, x0, y);
   g.restore();
 }
 
@@ -1042,13 +1133,27 @@ function lmBig(g, text, x, y, o = {}) {
 const KW = /\b(const|let|var|function|return|for|while|if|else|new|this|null|true|false|class|import|from|export|object|void|async|await)\b/;
 /**
  * Code block with line numbers, typed out: o.chars = how many characters are shown (default all), size, lh,
- * numbers, cursor, pal. Keywords take the accent, numbers and strings the fg, comments the dim colour.
+ * numbers, cursor, pal, clear. Keywords take the accent, numbers and strings the fg, comments the dim colour.
  */
 function lmCode(g, src, x, y, o = {}) {
   const pal = palOf(o.pal), size = o.size ?? 26, lh = size * (o.lh ?? 1.55), lines = String(src).split('\n');
   let left = o.chars ?? Infinity, cur = null;
   g.save(); g.font = `${size}px ${MONO}`; g.textBaseline = 'alphabetic';
   const cw = g.measureText('M').width;
+  const ca = clearAmt(o);
+  if (ca > 0) {                                                         // every line that has started typing: its whole place
+    const rr = [];
+    let l2 = left;
+    lines.forEach((ln, i) => {
+      if (l2 < 0) return;
+      const yy = y + i * lh;
+      g.font = `${size * 0.7}px ${MONO}`; const nw = o.numbers !== false ? g.measureText(String(i + 1)).width + cw * 1.2 : 0;
+      g.font = `${size}px ${MONO}`;
+      rr.push([x - nw, yy - size * 0.85, x + g.measureText(ln).width + (l2 <= ln.length && o.cursor !== false ? cw * 1.1 : 0), yy + size * 0.3]);
+      l2 -= ln.length + 1;
+    });
+    lmClear(g, rr, { alpha: ca, pad: size * 0.15, feather: size * 1.1 });
+  }
   lines.forEach((ln, i) => {
     if (left < 0) return;
     const yy = y + i * lh, show = ln.slice(0, Math.max(0, left));
@@ -1090,7 +1195,7 @@ function lmGL() {
 function lmOnBegin(fn) { BEGIN.push(fn); }
 
 MV.lumen = { LUMEN, MONO, SANS, lmGL, lmOnBegin, lmBegin, lmEnd, lmPal, lmPoints, lmLines, lmGlow, lmCamera, lmOrbit, lmScreen, lmModel, lmXf, LG, lmMorph,
-  lmTerminal, lmCaption, lmAmbient, lmHud, lmSection, lmTag, lmLabel, lmBig, lmCode, lmCodeBg, lmSource, lmCount, lmFmt, lmFlick, lmCss, glitchPass };
+  lmTerminal, lmCaption, lmAmbient, lmHud, lmSection, lmTag, lmLabel, lmBig, lmCode, lmCodeBg, lmSource, lmCount, lmFmt, lmFlick, lmCss, lmClear, glitchPass };
 Object.assign(G, { LUMEN, LM_MONO: MONO, LM_SANS: SANS, lmGL, lmOnBegin, lmBegin, lmEnd, lmPal, lmPoints, lmLines, lmGlow, lmCamera, lmOrbit, lmScreen, lmModel, lmXf, LG, lmMorph,
-  lmTerminal, lmCaption, lmAmbient, lmHud, lmSection, lmTag, lmLabel, lmBig, lmCode, lmCodeBg, lmSource, lmCount, lmFmt, lmFlick, lmCss });
+  lmTerminal, lmCaption, lmAmbient, lmHud, lmSection, lmTag, lmLabel, lmBig, lmCode, lmCodeBg, lmSource, lmCount, lmFmt, lmFlick, lmCss, lmClear });
 })(window);

@@ -20,7 +20,7 @@ mv-kit/
   tools/         render.py（导出视频 / 截图 / 拼板 / 检查 / qa / 角色定型图），qa.py（render.py qa：用真实渲染的帧量出唱到的词是否真的显示、字是否出框、主体是否出画、镜头动不动），new_project.py（新建项目），frames.py（把视频 / 静帧打包给 roto.js / illust.js），dreamina.py（用即梦画布 CLI 生成插画和图生视频片段），eyetrack.py（量帧包里眼睛每张画的开合和瞳孔位置），lightsoff.py（把插画里亮着的窗户涂掉并列出来，代码再一扇扇点亮），
                  lyric_timing.py（不含歌词文字的时间：data/timing.json，可以进 git）
   template/      新项目模板：会动的歌词字幕 + 风格圣经模板 TREATMENT.md
-  projects/      你的项目。anime-pdoom 是示例（10 秒二次元 demo），pigment-demo 是 pigment.js 的样张，lumen-demo 是 lumen.js 的样张，solid-demo 是 solid.js + sim.js 的样张（玻璃心形、光线步进晶格、百万沙粒克拉尼图形），roto-demo 是 roto.js 的样张（即梦素材 → 印刷赛璐璐），transition-demo 是转场的样张，kit-demo 是 camera.js / layout.js 和 qa 约定的样张（三个短镜头），act-demo 是 act.js、reads 和角色定型图的样张（原创角色 Pip，三个短镜头），pdoom-print 是 print.js 的示例（P(doom) 的 ASCII 打印稿版，全部代码绘制），pdoom-sign 是一轮出片流程的示例（P(doom) 做成工业安全须知：象形小人、警示牌、刻度盘；由 DeepSeek 按 docs/briefs/pdoom-sign 的施工图做出、qa 把关打磨四轮，全部代码绘制）
+  projects/      你的项目。anime-pdoom 是示例（10 秒二次元 demo），pigment-demo 是 pigment.js 的样张，lumen-demo 是 lumen.js 的样张，solid-demo 是 solid.js + sim.js 的样张（玻璃心形、光线步进晶格、百万沙粒克拉尼图形），field-demo 是三种"场"的样张（铁屑头尾相吸链成的磁力线、光线步进的极小曲面、没有领队的鸟群；三个镜头各一种调色板），roto-demo 是 roto.js 的样张（即梦素材 → 印刷赛璐璐），transition-demo 是转场的样张，kit-demo 是 camera.js / layout.js 和 qa 约定的样张（三个短镜头），act-demo 是 act.js、reads 和角色定型图的样张（原创角色 Pip，三个短镜头），pdoom-print 是 print.js 的示例（P(doom) 的 ASCII 打印稿版，全部代码绘制），pdoom-sign 是一轮出片流程的示例（P(doom) 做成工业安全须知：象形小人、警示牌、刻度盘；由 DeepSeek 按 docs/briefs/pdoom-sign 的施工图做出、qa 把关打磨四轮，全部代码绘制）
   docs/ENGINE.md 引擎 API 参考（写镜头时看）
   PROMPTS.md     分阶段提示词手册（和 Claude 一起做新 MV 时用）
   CLAUDE.md      给 Claude 的项目约定（在这个文件夹里用 Claude Code 时自动读取）

@@ -231,7 +231,8 @@ function glyphStats(tx, i0, i1, M, A, B) {
   const bx0 = Math.max(0, Math.floor(box[0])), by0 = Math.max(0, Math.floor(box[1]));
   const bx1 = Math.min(W, Math.ceil(box[2])), by1 = Math.min(H, Math.ceil(box[3]));
   g.setTransform(1, 0, 0, 1, 0, 0);
-  let inside = 0, visible = 0, touch = 0, cross = 0, geo = {};
+  let inside = 0, visible = 0, touch = 0, cross = 0, geo = {}, con = null;
+  const cons = [];
   if (bx1 > bx0 && by1 > by0) {
     // read the mask with a margin around the word: the ring just outside its glyphs is where "touching" is measured
     const r = Math.max(2, Math.round(0.06 * fontPx(tx.font) * scaleOf(M)));
@@ -249,12 +250,22 @@ function glyphStats(tx, i0, i1, M, A, B) {
       if (!B) continue;
       const o = (y * W + x) * 4;
       const dd = Math.max(Math.abs(A[o] - B[o]), Math.abs(A[o + 1] - B[o + 1]), Math.abs(A[o + 2] - B[o + 2]));
-      if (dd >= 24) { visible++; col[0] += A[o]; col[1] += A[o + 1]; col[2] += A[o + 2]; }
+      if (dd >= 24) {
+        visible++; col[0] += A[o]; col[1] += A[o + 1]; col[2] += A[o + 2];
+        const la = lum(A, o), lb = lum(B, o);
+        cons.push((Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05));
+      }
     }
     if (B && visible > 20) { const tc = touching(B, glyph, ex0, ey0, ew, eh, r, col.map(v => v / visible), fontPx(tx.font) * scaleOf(M)); touch = tc.same; cross = tc.cross; geo = { sameGeo: tc.sameGeo, crossGeo: tc.crossGeo }; }
+    // contrast: the letters against what is right behind them (the same pixels without the lyrics). The upper quarter
+    // of the glyph pixels: the solid strokes, not their anti-aliased edges
+    if (cons.length > 20) { cons.sort((a, b) => a - b); con = Math.round(cons[Math.floor(cons.length * 0.75)] * 100) / 100; }
   }
-  return { ink: Math.max(ink, inside), inside, visible, box, touch, cross, geo };
+  return { ink: Math.max(ink, inside), inside, visible, box, touch, cross, geo, con };
 }
+// relative luminance (sRGB, as WCAG): contrast = (lighter + 0.05) / (darker + 0.05), 1 (none) .. 21 (white on black)
+const LIN = new Float32Array(256).map((_, i) => { const c = i / 255; return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); });
+const lum = (D, o) => 0.2126 * LIN[D[o]] + 0.7152 * LIN[D[o + 1]] + 0.0722 * LIN[D[o + 2]];
 /** a CSS colour as [r, g, b, a] (0..255, a 0..1), or null for gradients / patterns */
 function rgba(css) {
   if (!css) return null;
@@ -345,7 +356,7 @@ function touching(B, glyph, x0, y0, w, h, r, c, em, inner) {
   let cross = 0;
   const bg = hist.map(hh => { let acc = 0; for (let v = 0; v < 256; v++) { acc += hh[v]; if (acc * 2 >= ringIdx.length) return v; } return 255; });
   const cbg = con(bg);
-  if (cbg >= 64) {
+  if (cbg >= 32) {                                  // dim words too (a history row): a bright line through them still strikes them out
     const far = Math.max(56, 0.55 * cbg);
     for (let i = 0; i < ringIdx.length; i++) if (dist(ringIdx[i], bg) >= far) { cross++; crossHit.push(i); }
   }
@@ -469,7 +480,7 @@ G.MV_QA = {
       if (!nw || (nw.length < 2 && !cjk(nw))) return { i, status: 'skip' };
       // a post filter moved the scene's pixels (3D tilt): only the screen layer can still be measured
       const TT = post.remapped ? T.filter(o => o.tx.where === 'out') : T;
-      let best = null;
+      let best = null, own = null;     // own: the best instance drawn as part of the word's own line (not "the" in "them" a row up)
       const partial = { ink: 0, visible: 0, inside: 0, cover: 0, box: null };
       for (const o of TT) {
         if (!o.tx.lyric) continue;
@@ -477,7 +488,8 @@ G.MV_QA = {
         if (k >= 0) {
           const s = glyphStats(o.tx, o.n.idx[k], o.n.idx[k + nw.length], o.M, A, B);
           const vis = s.ink > 0 ? s.visible / s.ink : 0;
-          if (!best || vis > best.vis) best = { vis, off: s.ink > 0 ? 1 - s.inside / s.ink : 0, box: s.box, px: o.px, s: o.tx.s, alpha: o.tx.alpha, touch: s.touch, cross: s.cross, geo: s.geo };
+          if (!best || vis > best.vis) best = { vis, off: s.ink > 0 ? 1 - s.inside / s.ink : 0, box: s.box, px: o.px, s: o.tx.s, alpha: o.tx.alpha, touch: s.touch, cross: s.cross, geo: s.geo, con: s.con };
+          if ((o.tx.lines || []).includes(w.line) && (!own || vis > own.vis)) own = { vis, con: s.con };
         } else if (o.n.n.length >= 2 && nw.includes(o.n.n)) {   // the word is drawn in pieces (syllables, letters)
           const s = glyphStats(o.tx, 0, o.tx.s.length, o.M, A, B);
           partial.ink += s.ink; partial.visible += s.visible; partial.inside += s.inside; partial.cover += o.n.n.length;
@@ -490,7 +502,7 @@ G.MV_QA = {
         if (!best || vis > best.vis) best = { vis, off: 1 - partial.inside / partial.ink, box: partial.box, px: partial.px, s: '(pieces)' };
       }
       if (!best) return { i, status: post.remapped || offscreen.some(o => o.includes(nw)) ? 'offscreen' : 'missing' };
-      return { i, status: 'ok', vis: Math.round(best.vis * 1000) / 1000, off: Math.round(best.off * 1000) / 1000, box: rnd(best.box), px: Math.round(best.px), s: best.s, touch: best.touch || 0, cross: best.cross || 0, geo: best.geo || {} };
+      return { i, status: 'ok', vis: Math.round(best.vis * 1000) / 1000, off: Math.round(best.off * 1000) / 1000, box: rnd(best.box), px: Math.round(best.px), s: best.s, touch: best.touch || 0, cross: best.cross || 0, geo: best.geo || {}, con: (own ? own.con : best.con) ?? null };
     });
     const tt = o => opt && opt.touch && A && o.px >= 24 && !post.remapped ? textTouch(o.tx, o.M, A) : { same: 0, cross: 0 };
     return {
@@ -524,7 +536,100 @@ G.MV_QA = {
     return { steps, span: first && gray ? changed(first, gray) : 0 };
     function changed(a, b) { let n = 0; for (let k = 0; k < a.length; k++) if (Math.abs(a[k] - b[k]) > 10) n++; return Math.round(n / a.length * 10000) / 10000; }
   },
+  /**
+   * How FAST the picture (lyrics left out) moves between consecutive times: design px per second, one number per
+   * step. "How much of the picture changed" cannot tell a dot cloud drifting 1 px from one rushing 20 px (both change
+   * the same pixels), and counts a flash or a fade as the busiest moment of a shot. So: block matching at 1/8 size,
+   * lightly blurred (a dot cloud is matched as its density: birds shuffling in a hovering flock are not a rush) —
+   * each 8 × 8 block with something in it is looked for in the next frame within ±8 px, by normalised
+   * cross-correlation (the same picture brighter, darker or flashed is no motion), to a fraction of a pixel; the
+   * step's speed is the mean displacement over those blocks. Content that only arrives (an edge sweeping in) is
+   * looked up where it came from; content that cannot be found at all (it burst, was cut, came out of nothing)
+   * counts as the fastest possible; on a smooth ramp the smallest move that fits is taken (no motion is invented).
+   */
+  speed(times) {
+    const w = Math.round(W / 8), h = Math.round(H / 8), sm = mk(w, h).getContext('2d', { willReadFrequently: true });
+    sm.imageSmoothingEnabled = true; sm.imageSmoothingQuality = 'high';
+    const out = [];
+    let prev = null, prevT = 0;
+    for (const t of times) {
+      const c = render(t, 'nolyric');
+      sm.clearRect(0, 0, w, h); sm.drawImage(c.canvas, 0, 0, w, h);
+      const d = sm.getImageData(0, 0, w, h).data, L = new Float32Array(w * h);
+      for (let k = 0; k < w * h; k++) L[k] = 0.2126 * d[k * 4] + 0.7152 * d[k * 4 + 1] + 0.0722 * d[k * 4 + 2];
+      soften(L, w, h);
+      if (prev) out.push(Math.round(flow(prev, L, w, h) * (W / w) / Math.max(1e-6, t - prevT)));
+      prev = L; prevT = t;
+    }
+    return out;
+  },
 };
+
+/**
+ * A light blur (two [1 2 1] passes each way, ≈ 1 px σ at 1/8 size: 8 design px) before matching: a cloud of dots
+ * becomes its density, so a flock hovering in place while each bird jitters reads as hovering — the dots shuffling
+ * among themselves would otherwise make every block unrecognisable, i.e. "as fast as anything can be".
+ */
+function soften(L, w, h) {
+  const tmp = new Float32Array(L.length);
+  for (let pass = 0; pass < 2; pass++) {
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const k = y * w + x; tmp[k] = (L[k - (x > 0)] + 2 * L[k] + L[k + (x < w - 1)]) / 4; }
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const k = y * w + x; L[k] = (tmp[k - (y > 0) * w] + 2 * tmp[k] + tmp[k + (y < h - 1) * w]) / 4; }
+  }
+}
+/** mean displacement (px of the w × h image) of the S × S blocks that have something in them, found again within ±M px */
+function flow(A, B, w, h) {
+  const S = 8, M = 8, n = S * S, T = 2.5, side = 2 * M + 1, w1 = w + 1;
+  // integral images (sum, sum of squares): the mean and spread of any S × S window in O(1)
+  const integ = P => {
+    const I = new Float64Array(w1 * (h + 1)), I2 = new Float64Array(w1 * (h + 1));
+    for (let y = 0; y < h; y++) {
+      let r = 0, r2 = 0;
+      for (let x = 0; x < w; x++) { const v = P[y * w + x]; r += v; r2 += v * v; I[(y + 1) * w1 + x + 1] = I[y * w1 + x + 1] + r; I2[(y + 1) * w1 + x + 1] = I2[y * w1 + x + 1] + r2; }
+    }
+    return [I, I2];
+  };
+  const box = (J, x, y) => J[(y + S) * w1 + x + S] - J[y * w1 + x + S] - J[(y + S) * w1 + x] + J[y * w1 + x];
+  const stat = (J, x, y) => { const m = box(J[0], x, y) / n; return [m, Math.sqrt(Math.max(0, box(J[1], x, y) / n - m * m))]; };
+  const JA = integ(A), JB = integ(B), G = new Float32Array(side * side), a = new Float32Array(n);
+  // where did the block of P at (bx, by) go in Q? the shortest move among the (nearly) best by normalised
+  // cross-correlation (a ramp or a stripe matches all along itself), to a fraction of a pixel; M if it is not there
+  function match(P, Q, JQ, bx, by, mp, sp) {
+    for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) a[y * S + x] = P[(by + y) * w + bx + x] - mp;
+    let best = -2;
+    for (let dy = -M; dy <= M; dy++) for (let dx = -M; dx <= M; dx++) {
+      const x0 = bx + dx, y0 = by + dy, sq = stat(JQ, x0, y0)[1];
+      let c = -1;
+      if (sq >= 0.5) {
+        let s = 0;
+        for (let y = 0; y < S; y++) { const o = (y0 + y) * w + x0, q = y * S; for (let x = 0; x < S; x++) s += a[q + x] * Q[o + x]; }
+        c = s / (n * sp * sq);
+      }
+      G[(dy + M) * side + dx + M] = c;
+      if (c > best) best = c;
+    }
+    if (best < 0.5) return M;                                   // not there any more: changed beyond recognition
+    let bdx = 0, bdy = 0, bl = Infinity;
+    for (let dy = -M; dy <= M; dy++) for (let dx = -M; dx <= M; dx++) {
+      if (G[(dy + M) * side + dx + M] < best - 0.02) continue;
+      const l = dx * dx + dy * dy; if (l < bl) { bl = l; bdx = dx; bdy = dy; }
+    }
+    const g = (dx, dy) => (Math.abs(dx) <= M && Math.abs(dy) <= M ? G[(dy + M) * side + dx + M] : NaN);
+    const sub = (m, c0, p) => { const den = m - 2 * c0 + p; return Number.isFinite(den) && den < -1e-6 ? clamp((m - p) / (2 * den), -0.5, 0.5) : 0; };
+    const ox = sub(g(bdx - 1, bdy), g(bdx, bdy), g(bdx + 1, bdy)), oy = sub(g(bdx, bdy - 1), g(bdx, bdy), g(bdx, bdy + 1));
+    return Math.min(M, Math.hypot(bdx + ox, bdy + oy));
+  }
+  let tot = 0, cnt = 0;
+  for (let by = M; by + S + M <= h; by += S) for (let bx = M; bx + S + M <= w; bx += S) {
+    const [ma, sa] = stat(JA, bx, by), [mb, sb] = stat(JB, bx, by);
+    if (sa < T && sb < T) continue;                             // nothing here, before or after
+    cnt++;
+    // content that was here: where it went. Content that only arrived (an edge sweeping in, a shape growing): where
+    // it came from — so a growing disc moves as fast as its rim, not as fast as anything can
+    tot += sa >= T ? match(A, B, JB, bx, by, ma, sa) : match(B, A, JA, bx, by, mb, sb);
+  }
+  return cnt ? tot / cnt : 0;
+}
 
 if (new URLSearchParams(location.search).has('qa')) install();
 })(window);
