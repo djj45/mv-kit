@@ -25,3 +25,6 @@ projects/pdoom-akari/art/clips/
 projects/pdoom-akari/frames/
 # the 即梦 CLI's account dump (it carries the user id): never commit it, in any project
 projects/*/art/dreamina/account.json
+
+# codebase-memory-mcp 生成的索引产物（本机生成，不入库；注意与需要入库的 .cbmignore 区分）
+.codebase-memory/

@@ -1,0 +1,4 @@
+# codebase-memory-mcp: 收录被硬编码名单误排除的真实代码目录
+# （内置名单无条件排除 tools/ 与 docs/，即使里面是源码；否定规则可覆盖）
+!tools/
+!docs/
