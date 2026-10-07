@@ -12,7 +12,7 @@ MV.timeline(({ lyrics, audio, T0, T1 }) => {
   if (!lines.length) return [{ scene: 'title', from: T0, to: T1 }];
   const cuts = lines.map(l => Math.max(T0, audio.beatBefore(l.words[0].start)));
   const out = [];
-  if (cuts[0] > T0 + 0.3) out.push({ scene: 'title', from: T0, to: cuts[0] });
+  if (cuts[0] > T0) out.push({ scene: 'title', from: T0, to: cuts[0] });
   lines.forEach((l, i) => {
     const to = i + 1 < lines.length ? cuts[i + 1] : T1;
     if (to > cuts[i]) out.push({ scene: 'lyrics', from: cuts[i], to, params: { line: l.i } });

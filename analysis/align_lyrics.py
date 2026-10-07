@@ -25,15 +25,17 @@ Steps
      the lyric files stay local (tools/lyric_timing.py merge rebuilds them from lyrics.txt).
 """
 import argparse
+import hashlib
 import json
 import re
 import sys
+import tempfile
 import unicodedata
 from difflib import SequenceMatcher
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'tools'))
-from mvproject import audio_path, load_project, stems_dir, write_data  # noqa: E402
+from mvproject import audio_path, fingerprint, load_project, stems_dir, write_data  # noqa: E402
 
 CJK = '぀-ヿ㐀-䶿一-鿿豈-﫿가-힯'
 TOKEN = re.compile(f'[{CJK}]|[^\\s{CJK}]+')
@@ -97,6 +99,49 @@ def transcribe(audio, lang, model, backend, prompt):
                            condition_on_previous_text=False, vad_filter=False)
     return [{'w': w.word.strip(), 'start': float(w.start), 'end': float(w.end), 'p': float(w.probability)}
             for s in segs for w in (s.words or [])]
+
+
+def write_atomic(path, text):
+    """Keep the previous cache intact if writing a replacement fails."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=path.parent, delete=False) as f:
+            tmp = Path(f.name)
+            f.write(text)
+        tmp.replace(path)
+    finally:
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
+
+
+def cached_transcribe(cache, audio, lang, model, backend, prompt, force=False):
+    """Reuse words only for the same source and recognition settings; old unkeyed caches are rebuilt.
+
+    Keep whisper_words.json a list for --words and other consumers. The sidecar also hashes that list,
+    so interruption between the two atomic writes cannot associate old metadata with new words.
+    """
+    meta_path = cache.with_suffix('.meta.json')
+    key_ = {'version': 1, 'audio': fingerprint(audio), 'lang': lang, 'model': model, 'backend': backend,
+            'prompt_sha256': hashlib.sha256(prompt.encode('utf-8')).hexdigest()}
+    if cache.exists() and not force:
+        try:
+            raw = cache.read_bytes()
+            meta = json.loads(meta_path.read_text(encoding='utf-8'))
+            if isinstance(meta, dict) and meta.get('input') == key_ and meta.get('words_sha256') == hashlib.sha256(raw).hexdigest():
+                words = json.loads(raw)
+                if isinstance(words, list):
+                    print(f'using cached {cache.name} ({len(words)} words; --retranscribe to redo)')
+                    return words
+        except (OSError, ValueError):
+            pass
+        print(f'{cache.name}: source/settings changed or cache metadata missing/invalid; transcribing again')
+    words = transcribe(audio, lang, model, backend, prompt)
+    raw = json.dumps(words, ensure_ascii=False, indent=0)
+    meta = {'input': key_, 'words_sha256': hashlib.sha256(raw.encode('utf-8')).hexdigest()}
+    write_atomic(cache, raw)
+    write_atomic(meta_path, json.dumps(meta, ensure_ascii=False, indent=2))
+    return words
 
 
 def split_rec(words):
@@ -280,16 +325,11 @@ def main():
         cache = PD / 'data' / 'whisper_words.json'
         if a.words:
             rec = json.loads(Path(a.words).read_text())
-        elif cache.exists() and not a.retranscribe:
-            rec = json.loads(cache.read_text())
-            print(f'using cached {cache.name} ({len(rec)} words; --retranscribe to redo)')
         else:
             st = stems_dir(cfg)
             src = Path(a.vocals) if a.vocals else (st / 'vocals.wav' if st and (st / 'vocals.wav').exists() else audio_path(cfg))
             prompt = ' '.join(l['text'] for l in lines)[:600]
-            rec = transcribe(src, a.lang, a.model, a.backend, prompt)
-            cache.parent.mkdir(exist_ok=True)
-            cache.write_text(json.dumps(rec, ensure_ascii=False, indent=0))
+            rec = cached_transcribe(cache, src, a.lang, a.model, a.backend, prompt, force=a.retranscribe)
         R = split_rec(rec)
         flat = [w for l in lines for w in l['words']]
         line_of = [li for li, l in enumerate(lines) for _ in l['words']]

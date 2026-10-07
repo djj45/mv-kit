@@ -11,7 +11,16 @@ MV.start = async function () {
   const q = new URLSearchParams(location.search);
   let cv = document.getElementById('mv');
   if (!cv) { cv = document.createElement('canvas'); cv.id = 'mv'; document.body.appendChild(cv); }
-  try { await document.fonts.ready; await MV.setup(); }
+  try {
+    // Set the export rate before setup: scene init, f.fps, QA and shutter sampling all use it.
+    // Normal previews keep the rate stored in project.js.
+    if (q.has('export') && q.has('fps')) {
+      const fps = Number(q.get('fps'));
+      if (!Number.isFinite(fps) || fps <= 0) throw new Error('export fps must be > 0');
+      G.MV_PROJECT = { ...G.MV_PROJECT, fps };
+    }
+    await document.fonts.ready; await MV.setup();
+  }
   catch (err) { fatal(err); return; }
   cv.width = Math.round(W * MV.scale); cv.height = Math.round(H * MV.scale);   // the output: design units × MV.scale pixels
   if (MV.scale !== 1) { cv.__k = MV.scale; cv.getContext('2d').setTransform(1, 0, 0, 1, 0, 0); }

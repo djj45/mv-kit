@@ -83,6 +83,8 @@ if a.uhd:
     a.scale = 2.0
 if a.scale <= 0:
     sys.exit('--scale must be > 0')
+if a.fps is not None and a.fps <= 0:
+    sys.exit('--fps must be > 0')
 if a.mode in ('check', 'qa', 'model') and a.scale != 1:
     print(f'note: {a.mode} looks at 1x (layout is the same at every scale); --scale ignored')
     a.scale = 1.0
@@ -137,7 +139,8 @@ class Page:
         # missing optional data files are reported as warnings by the engine; required ones set MV_FATAL
         self.page.on('console', lambda m: m.type == 'error' and 'Failed to load resource' not in m.text and errors.append(m.text))
         self.page.on('pageerror', lambda e: errors.append(str(e)))
-        self.page.goto((PD / 'index.html').as_uri() + '?export=1' + ('&qa=1' if a.mode == 'qa' else '') + (f'&scale={a.scale:g}' if a.scale != 1 else ''))
+        self.page.goto((PD / 'index.html').as_uri() + '?export=1' + ('&qa=1' if a.mode == 'qa' else '')
+                       + (f'&scale={a.scale:g}' if a.scale != 1 else '') + (f'&fps={a.fps}' if a.fps is not None else ''))
         try:
             self.page.wait_for_function('window.MV_READY === true || !!window.MV_FATAL', timeout=120000)
         except Exception:
@@ -310,6 +313,8 @@ def main():
                 print(f)
         report_browser_errors(errors)
         pg.close()
+        if a.mode == 'check' and (scene_errors or errors):
+            sys.exit(1)
 
 
 def auto_workers():
