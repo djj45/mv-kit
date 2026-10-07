@@ -122,6 +122,10 @@ uv run tools/tune_lyrics.py projects/my-song      # 在浏览器里打开 http:/
 
 上面是人声频段的频谱（有 `stems/vocals.wav` 时可切换成人声分轨，更清楚）和起音曲线，下面是歌词，每个字一根竖线。把竖线拖到歌手**刚发声的瞬间**；空格播放两条竖线之间，`⇧+空格` 播放竖线前 0.6 秒、停在竖线上（末尾已经听到这个字，说明竖线晚了），`L` 循环多听几遍，`0.75× / 0.5×` 慢放，`A` 吸附到附近的起音，回车播放整句时按 `T` 可以边听边打点，`N` 跳到下一个"自动推算、待查"的字（橙色）。`⌘S` 保存：改动合并进 `data/lyrics_fix.json`，并自动重新运行一次对齐——改过的字成为锚点，没识别出来的字在锚点之间重新分配。刷新预览就能看到。
 
+Whisper 缓存会核对识别源音频的 SHA-256、语言、模型、backend 和歌词提示词；换音频、改识别设置或新增人声分轨后会自动重新识别。`data/whisper_words.json` 仍是词列表，校验信息保存在同目录的 `whisper_words.meta.json`，两者均不进 git。旧缓存没有校验信息，升级后首次运行会重新识别；`--retranscribe` 可强制重做，`--words` 仍可显式导入词列表。
+
+校准工具保存时通过 `--words` 明确复用已有识别词，只调整时间，不触发新识别。换歌曲或识别源后，先运行 `align_lyrics.py` 更新识别结果，再打开校准工具。
+
 也可以手动：对齐完会打印一份低置信度词表（也写在 `data/lyrics_report.txt`）。在预览里按 `d` 打开调试层，逐个听。不准的写进 `data/lyrics_fix.json` 再运行一次对齐（Whisper 结果有缓存，很快）：
 
 ```json
@@ -149,6 +153,24 @@ uv run tools/lyric_timing.py merge projects/my-song      # timing.json + lyrics.
 open projects/anime-pdoom/index.html
 uv run tools/render.py projects/anime-pdoom
 ```
+
+## 回归验证
+
+离线测试需要 Python 和 Node.js，不启动浏览器、不下载 Whisper 模型：
+
+```sh
+uv run python -B -m unittest discover -s tests -v
+```
+
+覆盖检查命令的退出码、识别缓存失效与失败保护、模板时间线边界，以及导出帧率和运动模糊采样。`check` 遇到场景或浏览器错误时返回 1；时间线提示仍作为提示，不改变退出码。`--fps` 会在导出页初始化前生效，场景、QA 和运动模糊使用同一帧率。
+
+浏览器可用时，运行三个项目的实际渲染基线：
+
+```sh
+uv run python -B tests/render_baseline.py --out work/render-baseline
+```
+
+默认检查 `kit-demo`、`field-demo` 和完整歌曲项目 `pdoom-sign`：每个镜头中间渲一帧，再倒序重渲并核对哈希，输出 `baseline.json` 和每个项目的三张代表帧。基线记录应在同一浏览器、字体和 GPU 环境下比较；此检查不替代整片 `render.py … qa`。
 
 ## 注意
 

@@ -3,6 +3,7 @@ __pycache__/
 projects/*/out/
 projects/*/stems/
 projects/*/data/whisper_words.json
+projects/*/data/whisper_words.meta.json
 projects/*/data/audio_qa.png
 .DS_Store
 

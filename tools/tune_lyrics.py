@@ -194,7 +194,13 @@ class Tuner:
             self.fix_f.parent.mkdir(exist_ok=True)
             self.fix_f.write_text('[\n' + ',\n'.join(' ' + json.dumps(e, ensure_ascii=False) for e in out) + '\n]\n', encoding='utf-8')
             args = [sys.executable, str(KIT / 'analysis' / 'align_lyrics.py'), str(self.PD)]
-            if not (self.PD / 'data' / 'whisper_words.json').exists():
+            words = self.PD / 'data' / 'whisper_words.json'
+            if words.exists():
+                # Calibration edits the existing transcript, not its recognition settings. Explicitly import it:
+                # a bare align invocation would otherwise invalidate a --lang/--model/--vocals cache on save.
+                # Re-analyse a changed song with align_lyrics.py before calibrating it in the tuner.
+                args += ['--words', str(words)]
+            else:
                 args.append('--no-whisper')
             r = subprocess.run(args, capture_output=True, text=True, cwd=KIT)
             log = (r.stdout + r.stderr).strip()
