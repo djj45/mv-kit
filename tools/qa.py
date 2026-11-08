@@ -108,6 +108,7 @@ from collections import defaultdict
 from pathlib import Path
 
 SEV = {'scene-error': 'error', 'lyric-hidden': 'error', 'box-cross': 'error', 'focus-out': 'error',
+       'subject-overlap': 'warn', 'subject-unverified': 'warn',
        'lyric-faint': 'warn', 'lyric-contrast': 'warn', 'lyric-missing': 'warn', 'lyric-edge': 'warn', 'lyric-carryover': 'warn', 'lyric-handover': 'warn', 'lyric-overlap': 'warn',
        'lyric-covered': 'warn', 'lyric-cover': 'warn', 'lyric-touch': 'warn', 'text-touch': 'warn', 'text-cut': 'warn',
        'box-tight': 'warn', 'box-clash': 'warn',
@@ -214,15 +215,22 @@ def run(pg, info, a, cfg, out_dir):
                             probes[t].append(w['i'])
                             if l != cur[-1]:
                                 older_at[t].add(w['i'])
+    import subjectqa
+    regular_times = set(probes)
+    # Read only numeric camera parameters; rendering and receipt schemas stay unchanged.
+    subject_shots = page.evaluate('''MV.entries.map(e => ({from:e.from,to:e.to,fadeIn:e.fadeIn,
+      reads:e.reads || [],sync:e.sync || [],insert:e.insert ? {at:e.insert.at,dur:e.insert.dur ?? 1.1} : null}))''')
+    for t in subjectqa.sample_times(subject_shots, words, fps, t0, t1):
+        probes.setdefault(t, [])
     times = sorted(probes)
     print(f"qa: {len(times)} frames to look at ({sum(len(v) for v in probes.values())} sung words, {len(shots)} shots)…")
 
     findings = []
 
-    def add(kind, t, shot, msg, box=None, frame_box=None, key=None, value=None):
+    def add(kind, t, shot, msg, box=None, frame_box=None, key=None, value=None, sev=None):
         if kind in off:
             return
-        findings.append({'kind': kind, 'sev': SEV[kind], 't': round(t, 3), 'shot': shot, 'msg': msg,
+        findings.append({'kind': kind, 'sev': sev or SEV[kind], 't': round(t, 3), 'shot': shot, 'msg': msg,
                          'box': box, 'frame_box': frame_box, 'key': key or (kind, shot, msg), 'value': value})
 
     results = []
@@ -236,6 +244,13 @@ def run(pg, info, a, cfg, out_dir):
                 key=('scene-error', r['err'][:60]))
         top = r['shots'][-1] if r['shots'] else -1
         sh = shot_name(top)
+        for region in r.get('subjects', []):
+            finding = subjectqa.finding(region)
+            if finding:
+                add(t=t, shot=shot_name(region['entry']),
+                    key=(finding['kind'], region['entry'], region['name'], finding['sev']), **finding)
+        if t not in regular_times:
+            continue  # extra semantic probes must not change unrelated lyric/history measurements
         # --- words
         for wr in r['words']:
             w = words[wr['i']]
@@ -633,7 +648,7 @@ def run(pg, info, a, cfg, out_dir):
     max_crops = int(qc.get('crops', 60))
     from PIL import Image, ImageDraw
     for k, g in enumerate(items):
-        if k >= max_crops or (g['box'] is None and g['kind'] not in ('static', 'one-speed', 'read-unled', 'lyric-missing', 'lyric-cover')):
+        if k >= max_crops or (g['box'] is None and g['kind'] not in ('static', 'one-speed', 'read-unled', 'lyric-missing', 'lyric-cover', 'subject-unverified')):
             continue
         png = pg.frame(g['t'], 1, ('image/png', 1), {})
         im = Image.open(io.BytesIO(png)).convert('RGB')
@@ -660,6 +675,13 @@ def run(pg, info, a, cfg, out_dir):
              f"{len(motion)} shots checked for motion, {nreads} reads checked for focus. {len(errs)} errors, {len(warns)} warnings. {time.time() - started:.0f} s.", '']
     if type_note:
         lines += [f"Type: {type_note}.", '']
+    subject_coverage = subjectqa.coverage(results, shots, t0, t1,
+                                        disabled=bool(off & {'subject-overlap', 'subject-unverified'}))
+    lines += [f"Subject protection: {subject_coverage['status']}; "
+              f"{subject_coverage['measuredRegions']} region samples measured, "
+              f"{subject_coverage['unverifiedRegions']} unverified; "
+              f"{len(subject_coverage['unmarkedShots'])} shots without declarations. "
+              "Sampling does not prove every frame is clear.", '']
     lines += ['| | kind | time | shot | what | crop |', '|---|---|---|---|---|---|']
     for g in items:
         when = f"{g['t']:.2f}" + (f" (×{g['n']}, to {g['t_last']:.2f})" if g['n'] > 1 else '')
@@ -674,12 +696,15 @@ def run(pg, info, a, cfg, out_dir):
         for m in sped:
             lines.append(f"| {m['shot']} | {m['from']:.2f} | {' '.join(f'{x:.0f}' for x in m['speed'])} |")
     (qdir / 'report.md').write_text('\n'.join(lines) + '\n')
-    (qdir / 'qa.json').write_text(json.dumps({'findings': items, 'motion': motion, 'type': type_note,
+    (qdir / 'qa.json').write_text(json.dumps({'findings': items, 'motion': motion, 'type': type_note, 'subjectProtection': subject_coverage,
                                               'counts': {'frames': len(times), 'words': checked, 'missing': missing}}, ensure_ascii=False, indent=1, default=list))
 
     print()
     if type_note:
         print('type:', type_note)
+    print(f"subject protection: {subject_coverage['status']} · "
+          f"{len(subject_coverage['unmarkedShots'])} shots without declarations · "
+          f"{subject_coverage['unverifiedRegions']} region samples unverified")
     for g in items:
         when = f"{g['t']:7.2f}" + (f" ×{g['n']}" if g['n'] > 1 else '')
         print(f"  {'ERROR' if g['sev'] == 'error' else 'warn '} {g['kind']:<13} {when:<12} {g['shot']:<14} {g['msg']}" + (f"\n{'':>22}→ {g['crop']}" if g.get('crop') else ''))

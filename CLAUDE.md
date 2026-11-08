@@ -8,11 +8,15 @@
 2. **方案先行**：先按 `template/TREATMENT.md` 写好项目的 `TREATMENT.md`（概念、画风、调色板、字体、母题、角色、镜头表），给用户看，确认后再写代码。风格要具体到能照着画：线条、阴影层数、配色、质感、作画张数、镜头语言。镜头表每一行都要有**事件**（首帧到尾帧变了什么）和 **reads**（观众依次要看懂什么）。
    有角色时，先写角色的 lib（用 `kits/act.js` 的姿态驱动）并用 `MV.model` 登记定型图，`render.py projects/<项目> model` 出图、用 Read 打开亲自看（各视角头顶和眼线对齐、表情读得出来），给用户看过再写镜头。
 3. **时间线**：`timeline.js` 用 `cut / after / start / word` 按歌词内容和节拍算切点，不手写秒数。每个条目写 `reads`（镜头表那一列）：`check` 报 `read` 的地方先改好（加长镜头、往后挪下一条、删掉一条）。
-4. **镜头**：一个镜头一个 `scenes/<名字>.js`；多个镜头共用的角色、背景、道具放 `lib/`（在 `project.scripts` 里列出）；能跨项目复用的画风工具放 `kits/`。项目默认带 `kits/camera.js` 和 `kits/layout.js`（用法见 `docs/ENGINE.md`「风格包」，每种用法在 `projects/kit-demo` 里有一处范例）。
-5. **每改一个镜头就看图、跑 qa**：`uv run tools/render.py projects/<项目> sheet --cuts`（或 `stills --t …`），用 Read 工具**打开 PNG 亲自检查**构图、衔接；每个关键动作（起跳、转身、情绪变化、转场）出一张 `strip --step 0.083` 逐帧看预备、跟随和有没有跳帧；然后 `render.py projects/<项目> qa --from <镜头起> --to <镜头止>`，打开它给的局部截图，**错误清零再做下一个镜头**。拼板看不出几个像素的出框和被裁掉一半的字，那些以 qa 为准。
-6. **导出**：先 `check` 确认没有场景报错并处理时间线 / 歌词提示，再整片跑 `qa`：**没有错误才算做完**，警告逐条处理，保留的在 TREATMENT 里写理由。然后 `uv run tools/render.py projects/<项目>`。提示歌曲文件不是分析时那一份时，先弄清楚再导出。导出按块渲染并留在 `out/.chunks/`：中断了再跑同一条命令就接着渲，改了一个镜头再导出只重渲那几块。
+4. **镜头配方与动态样片**：先读 `recipes/README.md`，选择适合叙事的配方并读源码，把配方 ID / 改动写进镜头表。按 `docs/PILOT.md` 先实现代表性动作和一次衔接，局部 qa 后用 `render.py projects/<项目> pilot --from … --to …` 出带实际音乐的样片，播放检查落点、阅读停留和衔接，再铺开全片；静帧不代替视频。用户要求先审样时等待反馈；已要求直接完成时自行审看并继续。样片默认独立输出到 `out/pilots/`，不覆盖整片。
+5. **镜头**：一个镜头一个 `scenes/<名字>.js`；多个镜头共用的角色、背景、道具放 `lib/`（在 `project.scripts` 里列出）；能跨项目复用的画风工具放 `kits/`。项目默认带 `kits/camera.js` 和 `kits/layout.js`（用法见 `docs/ENGINE.md`「风格包」，每种用法在 `projects/kit-demo` 里有一处范例）。
+6. **每改一个镜头就看图、跑 qa**：`uv run tools/render.py projects/<项目> sheet --cuts`（或 `stills --t …`），用 Read 工具**打开 PNG 亲自检查**构图、衔接；每个关键动作（起跳、转身、情绪变化、转场）出一张 `strip --step 0.083` 逐帧看预备、跟随和有没有跳帧；然后 `render.py projects/<项目> qa --from <镜头起> --to <镜头止>`，打开它给的局部截图，**错误清零再做下一个镜头**。拼板看不出几个像素的出框和被裁掉一半的字，那些以 qa 为准。
+7. **导出**：先 `check` 确认没有场景报错并处理时间线 / 歌词提示，再整片跑 `qa`：**没有错误才算做完**，警告逐条处理，保留的在 TREATMENT 里写理由。然后 `uv run tools/render.py projects/<项目>`。提示歌曲文件不是分析时那一份时，先弄清楚再导出。导出按块渲染并留在 `out/.chunks/`：中断了再跑同一条命令就接着渲，改了一个镜头再导出只重渲那几块。
+8. **编码后验收**：按 `docs/ENCODED-QA.md` 在时间线条目 `sync` 中标注少量关键硬切 / 动作（时间来自同一歌词或节拍，动作明确 ROI 和观测指标）。导出用 `--verify`，或分别运行 `filmcheck / sync`；查看 `out/qa/encoded/`。退出码 1 修复后重渲，2 表示未验证，补观测或如实交付人工复核，不能当通过。黑场、定格等保留理由记在 TREATMENT，结构 / 版本失败不可豁免。样片只证明范围内已测事件，完整带声审看仍需要。
 
 ## 代码规则
+
+- 主体遮挡：脸、瞳孔等不能被歌词覆盖的部位，用 `MV.protect(g,x,y,w,h,{name})` 声明可见保护区，见 `docs/SUBJECT-QA.md`。它不改变画面或运镜。处理 `subject-overlap`，同时查看 `subjectProtection` 的未标注镜头和 `subject-unverified`；零错误不代表未标注区域已通过。转场和三维变形需保留人工复核。
 
 - 确定性：一帧只由 `f.t` 决定。禁止 `Math.random / Date.now / performance.now`；用 `hash / mulberry32 / noise1`。不在 `render` 里累积状态；写不成时间函数的模拟用 `kits/sim.js` 的 `SIM.make`（固定步长从镜头开头算到 t，带检查点），不要自己在 render 里一帧帧往前推。
 - lumen 画面里要有受光的面（玻璃、金属、分子球棍、立体字）或光线步进的结构时，用 `kits/solid.js`（`smMesh / smGlass / smShader`，见 `docs/ENGINE.md`「solid.js」），画进 lumen 的同一块光里，不要另开一个 WebGL 画布再贴上去（那样拿不到 lumen 的泛光和深度，点云也躲不到实体后面）。
@@ -63,9 +67,18 @@ uv run tools/render.py projects/X --from 30 --to 40 --preset veryfast   # 快速
 uv run tools/render.py projects/X model            # 角色定型图（MV.model）→ out/model-<名字>.png
 uv run tools/render.py projects/X                  # 最终导出（按块并行 --workers N；中断后再跑接着渲；--fresh 全部重渲、--clean 导完删块；--png 无损传帧）
 uv run tools/render.py projects/X --4k             # 原生 4K 导出（stills / sheet / strip 也可以加 --4k）
+uv run tools/render.py projects/X remix --verify   # 仅改声音：复用成片视频流；配置见 docs/SOUND-DELIVERY.md
+uv run tools/render.py projects/X subtitles        # 仅改字幕：导出 SRT/VTT 并刷新回执，不修改 MP4
+uv run tools/render.py projects/X review           # 离线多轨审片、字幕叠加、QA 定位；见 docs/REVIEW.md
+uv run tools/render.py projects/X subtitlecheck    # 字幕重叠、停留、阅读速度、行数和行宽
+uv run tools/render.py projects/X package          # 复用编码 QA，导出逐镜 MP4 / 对齐音轨 / SRT / VTT
 uv run tools/tune_lyrics.py projects/X             # 歌词校准工具（频谱 + 逐字竖线，保存到 data/lyrics_fix.json）
 uv run tools/lyric_timing.py merge projects/X      # 新 clone / 换电脑：用本机 lyrics.txt + data/timing.json 还原歌词数据和校准
 uv run tools/dreamina.py projects/X doctor          # 即梦画布 CLI：版本、schema、实时模型表 → art/dreamina/（生成图片和视频都用它，用户在 Mac 上跑）
 uv run tools/dreamina.py projects/X video B4v       # 免费：传首帧、存草稿、报价；加 --ceiling N 才扣积分并下载到 art/clips/
 uv run tools/dreamina.py projects/X image A2        # 同上，插画（prompts.json），输出 art/<id>.jpg
 ```
+
+缓存管理：`uv run tools/cachectl.py projects/<name>` 查看容量和命中率；`--prune` 预览，`--apply` 执行，可加 `--kind audio|clips|chunks|review`、`--keep-mb`、`--older-than-days`。复用 `tools/cachectl.py` 的进程锁保护缓存读写，禁止任务中绕过锁清理。详见 `docs/CACHE.md`。
+
+人工审片 JSON 通过 `package --review-record /path/to/record.json` 附入交付包；不得把自动 QA 或验包通过当作人工批准。独立验包：`uv run tools/verify_package.py /path/to/package`，只读取包内文件，见 `docs/PACKAGE-VERIFY.md`。

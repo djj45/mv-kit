@@ -2,6 +2,8 @@
 
 引擎是一组普通的 `<script>`（没有构建步骤），项目的 `index.html` 先加载 `project.js` 再加载 `engine/boot.js`。boot 按顺序加载：引擎 → `project.kits` 里的风格包 → `data/*.js` → `project.scripts` → `scenes/<名字>.js` → `timeline.js`，然后启动预览或导出。
 
+多音轨后期与逐镜交付见 [SOUND-DELIVERY.md](SOUND-DELIVERY.md)。`project.soundtrack` 指向只供导出使用的 JSON；Canvas 不读它。声音修改使用 `render.py remix` 复制原视频流，`package` 输出逐镜视频、对齐音轨及 SRT/VTT。`MV_EXPORT.info` 同时提供歌词行字幕与镜头事件，交付继续使用原有渲染和 QA。
+
 ## 铁律：确定性
 
 输出必须只由 `f.t` 决定：导出时帧会乱序渲染，运动模糊还会在一帧内渲染多个子帧再平均。
@@ -107,6 +109,7 @@ MV.timeline(({ lyrics, audio, cut, after, start, T0, T1 }) => [
 - 条目首尾相接就是硬切；只有写了 `fadeIn` 且重叠时才交叉淡化。前一个条目要一直延续到 `from + fadeIn`，否则它一结束，淡化到一半的画面会跳成新镜头。
 - 转场：条目写 `fadeIn: 秒数, wipe: '名字'`，新镜头就按这个转场进来（代替交叉淡化），见下面的"转场"。
 - 同一个场景可以出现多次，用 `params` 区分。
+- 可选 `id` 为镜头的持久身份，例如 `id: 'opening.route'`；重命名或重排时保留，复制、拆分或合并为新镜头时分配新 ID。1–128 个字符，以英文字母或数字开头，后续允许字母、数字、`.`、`_`、`:`、`-`，有效时间线内唯一。预览与导出拒绝非法或重复 ID；未写 ID 的旧项目保持兼容。它只用于元数据及历史备注关联，不改变绘制与转场。详见 [REVIEW.md](REVIEW.md)。
 - **reads**（观众要看懂什么，按顺序）：条目上写 `reads: [[时间, '看懂什么', '眼睛该在的 MV.focus 名字'], …]`。每一条一直持续到下一条开始（或镜头交出去），所以天然一次只有一件事。时间用 `word / start / cut` 算，不写死秒数。第三项也可以是 `{ focus, quick: true }`：`quick` 表示一个**有预备动作铺垫**的快动作，可以短一些。
   ```js
   { scene: 'chase', from: cut('Your circuits'), to: cut('now I'),
@@ -395,6 +398,10 @@ render(g, f) {
 
 做完的标准是 **qa 没有错误**，警告逐条处理或在 TREATMENT 里写下为什么保留。拼板（`sheet --cuts`）还是要看，但它看不出几个像素的出框、看不出被裁掉一半的字——那些交给 qa。
 
+### 主体保护区域
+
+主体不能被歌词遮挡时，在场景里调用 `MV.protect(g, x, y, w, h, {name, severity: 'warn', maxOverlap: 0.01})`。它只声明 QA 区域，不画图、不改变相机；跟随当前 Canvas 变换和二维运镜。新增 `subject-overlap`（默认警告，可显式设为错误）及 `subject-unverified`（无法可靠映射时的警告），并在报告中列出未标注镜头。详细规则、采样与误报边界见 [主体遮挡 QA](SUBJECT-QA.md)。
+
 ## 性能
 
 预览目标 < 40 ms / 帧。Canvas 2D 的大面积 `filter: blur()`、每帧新建大画布、每帧重画静态背景最费时，都应该移到 `init` 里。需要 WebGL 时，在场景里建一个离屏 WebGL 画布，渲染后 `g.drawImage(glCanvas, 0, 0)` 即可。
@@ -402,3 +409,13 @@ render(g, f) {
 WebGL 要跑在 GPU 上才快：导出时 `render.py` 已经请求 GPU（macOS 上用 Metal；`MV_ANGLE` 环境变量可改），`render.py … check` 会打印 WebGL 用的是什么渲染器，写着 software / SwiftShader 就是软件渲染，pigment.js 会慢很多，solid.js 的光线步进（`smShader`）会慢上百倍：软件渲染下先用 `res: 0.5` 看构图，出片在 Mac 上跑。
 
 导出：`render.py` 把整片切成约 `--chunk` 秒（默认 4）一块，`--workers` 个无头浏览器 + x264（默认按 CPU 核数，最多 4）从队列里一块块取，重的段落（WebGL、帧包）不会拖住某一个 worker；最后无损拼接再合上歌。渲好的块留在 `out/.chunks/`，文件名由导出设置、帧区间和**它用到的文件的哈希**组成（共用的：engine、项目用到的 kits、project.js、index.html、lib、timeline.js、data、art、帧包……；加上这一块里出现的镜头各自的场景文件，以及这些场景文件用到全局名字的其他场景文件）。所以：导出中断（Ctrl-C、崩溃、合盖）后再运行同一条命令，从断的地方接着渲；改了一个镜头再导出，只重渲这个镜头所在的块（改了 lib、timeline、kit 就全部重渲）。出过场景错误的块这次照常拼进去，但不留。`--fresh` 全部重渲，`--clean` 导完删掉这些块。这依赖确定性：一帧只由 t 决定。帧以 JPEG（质量 0.98）传出页面；`--png` 改成无损 PNG（每帧慢约 1.7 倍）。因为每一帧只由 t 决定，并行和逐帧渲染的结果一样。进度条数的是交给编码器的帧：一块的最后一帧送进去时 x264 手里还有几十帧（前瞻、B 帧、多线程，4K 下是几秒的活），由后台线程等它编完、存块，浏览器直接接着渲下一块；整片最后一帧之后显示的 `encoding the frames x264 still holds` 和 `joining N chunks` 就是这段收尾和无损拼接。画面按 BT.709 矩阵转成 YUV，并在文件里标明 BT.709（原色、传输曲线、矩阵、tv 范围）。
+
+## 镜头配方与样片入口
+
+选动作与时序见 [recipes/README.md](../recipes/README.md)，动态样片的范围选择、声音和交付见 [PILOT.md](PILOT.md)。`render.py projects/X pilot` 读取可选的 `project.pilot = {from, to, reason}`；`pilot --from … --to …` 成对覆盖范围，输出到 `out/pilots/`。它沿用原有逐帧渲染与缓存，不修改时间线或正式导出范围。
+
+## 编码后检查与时间线 sync 事件
+
+`render.py projects/X filmcheck` 扫描实际 MP4，`sync` 回测关键事件，`--verify` 在视频 / 样片导出后串联两项检查。规格来自 `<视频>.render.json`；选其他文件用 `--file`，无需重新启动浏览器。使用方法、退出码和校验边界见 [ENCODED-QA.md](ENCODED-QA.md)。
+
+时间线条目新增可选元数据 `sync: [{id, type: 'cut' | 'action', at, visual?}]`。`at` 与 `reads` 一样是歌曲绝对时间，应由 `word / cut / audio.timeOfBeat` 得出；场景动作仍从同一个时间求值，声明不会自动驱动动作。硬切在条目起点；动作显式声明 `visual: {metric: 'change' | 'brightness', roi: [x,y,w,h]}`，ROI 是输出画面 0–1 的归一化矩形。仅把有明确可观测落点的关键事件加入此表，不能拿像素变化峰替代任意动作的语义判断。

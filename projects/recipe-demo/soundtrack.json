@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "song": {
+    "gainDb": 0
+  },
+  "tracks": [
+    {
+      "id": "value-sfx",
+      "role": "sfx",
+      "file": "audio/value-sfx.wav",
+      "at": 4.8,
+      "duration": 0.6,
+      "gainDb": -3,
+      "fadeIn": 0.02,
+      "fadeOut": 0.1
+    },
+    {
+      "id": "voice-guide",
+      "role": "voice",
+      "file": "audio/voice-guide.wav",
+      "at": 18.2,
+      "duration": 2.4,
+      "gainDb": -6,
+      "fadeIn": 0.08,
+      "fadeOut": 0.15
+    },
+    {
+      "id": "portal-sfx",
+      "role": "sfx",
+      "file": "audio/portal-sfx.wav",
+      "at": 19.3,
+      "duration": 0.45,
+      "gainDb": -3,
+      "fadeIn": 0.02,
+      "fadeOut": 0.15
+    }
+  ],
+  "subtitles": [
+    {
+      "start": 18.2,
+      "end": 20.2,
+      "text": "进入同形转场"
+    },
+    {
+      "start": 20.3,
+      "end": 22.6,
+      "text": "落定后留出阅读时间"
+    }
+  ]
+}

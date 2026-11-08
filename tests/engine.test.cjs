@@ -42,19 +42,19 @@ test('template covers a trimmed start and repeated cut times', () => {
 
 // Run the real startup, engine and export hook. Only drawing primitives are no-ops;
 // scene callbacks observe the actual sub-frame times and effective fps.
-async function engine(query) {
+async function engine(query, entries, expectReady = true) {
   const times = [], rates = [];
   function canvas() {
-    const c = { width: 0, height: 0, toDataURL: () => 'data:image/png;base64,' };
+    const c = { width: 0, height: 0, style: {}, toDataURL: () => 'data:image/png;base64,' };
     const g = new Proxy({ canvas: c, createImageData: (w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }),
       createRadialGradient: () => ({ addColorStop() {} }) }, { get: (o, k) => k in o ? o[k] : () => {} });
     c.getContext = () => g;
     return c;
   }
   const output = canvas();
-  const sandbox = { console, URLSearchParams, location: { search: query },
+  const sandbox = { console: {...console, error() {}}, URLSearchParams, location: { search: query },
     document: { currentScript: null, fonts: { ready: Promise.resolve() },
-      createElement: canvas, getElementById: () => output, body: { classList: { add() {} } } },
+      createElement: canvas, getElementById: () => output, body: { appendChild() {}, classList: { add() {} } } },
     MV_PROJECT: { fps: 24, from: 0, to: 2, width: 64, height: 36, post: { grain: 0, vignette: 0 } } };
   sandbox.window = sandbox;
   const ctx = vm.createContext(sandbox);
@@ -62,9 +62,9 @@ async function engine(query) {
   let initFps;
   sandbox.MV.scene('sample', { init: MV => { initFps = MV.project.fps; },
     render: (g, f) => { times.push(f.t); rates.push(f.fps); } });
-  sandbox.MV.timeline(() => [{ scene: 'sample', from: 0, to: 2 }]);
+  sandbox.MV.timeline(() => entries || [{ scene: 'sample', from: 0, to: 2 }]);
   await sandbox.MV.start();
-  assert.equal(sandbox.MV_READY, true);
+  if (expectReady) assert.equal(sandbox.MV_READY, true);
   return { sandbox, times, rates, initFps };
 }
 
@@ -83,3 +83,22 @@ for (const fps of [24, 60]) {
     assert.equal(s.MV_EXPORT.error(), null);
   });
 }
+
+test('optional shot IDs survive real engine export without generating IDs for legacy shots', async () => {
+  const { sandbox: s } = await engine('?export=1', [
+    { id: 'opening-01', scene: 'sample', from: 0, to: 1 },
+    { scene: 'sample', from: 1, to: 2 },
+  ]);
+  assert.equal(s.MV_EXPORT.info.shots[0].id, 'opening-01');
+  assert.equal(Object.hasOwn(s.MV_EXPORT.info.shots[1], 'id'), false);
+});
+test('duplicate and invalid shot IDs stop export startup', async () => {
+  for (const id of ['same', '', null, 12, 'bad id', 'a'.repeat(129), 'end\n']) {
+    const { sandbox: s } = await engine('?export=1', [
+      { id: 'same', scene: 'sample', from: 0, to: 1 },
+      { id, scene: 'sample', from: 1, to: 2 },
+    ], false);
+    assert.match(s.MV_FATAL, /shot.id/);
+    assert.notEqual(s.MV_READY, true);
+  }
+});

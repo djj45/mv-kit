@@ -5,6 +5,8 @@
 //                               never leaves the picture. Call it every frame the subject is on screen.
 //   MV.keep(g, x, y, w, h)      A rectangle that must stay on screen whatever the camera does (a lyric line):
 //                               kits/camera.js limits its zooms so these stay inside the frame.
+//   MV.protect(g,x,y,w,h,o)    A visible subject region lyrics must not cover. QA only; name, severity,
+//                               maxOverlap (default .01). Does not draw or constrain the camera.
 //   MV.box(g, x, y, w, h, o)    "Text goes inside this rectangle": a table cell, a title-block row, a label plate,
 //                               a terminal panel. In g's current coordinates. Its own text (drawn in the same
 //                               MV.group, or MV.within(o.owner)) must sit inside with room to breathe (o.pad: minimum
@@ -45,6 +47,19 @@ MV.box = function (g, x, y, w, h, o) {
   QA.boxes.push({ m: [m.a, m.b, m.c, m.d, m.e, m.f], rect: [x, y, w, h], name: (o && o.name) || '', where: frameCanvas(g.canvas),
                   pad: o && o.pad != null ? o.pad : null, entry: MV.curEntry ? MV.curEntry.i : -1, alpha: g.globalAlpha,
                   owner: (o && o.owner) || currentOwner() });
+};
+/** A semantic no-lyric region (face, pupil, important prop), in g's current coordinates.
+ * Only records during QA; does not draw or constrain the camera. Call each visible frame. */
+MV.protect = function (g, x, y, w, h, o = {}) {
+  if (!QA.on || QA.mode !== 'record') return;
+  if (![x, y, w, h].every(Number.isFinite) || w <= 0 || h <= 0 ||
+      (o.severity != null && !['warn', 'error'].includes(o.severity)) ||
+      (o.maxOverlap != null && (!Number.isFinite(o.maxOverlap) || o.maxOverlap < 0 || o.maxOverlap > 1)))
+    throw new Error('MV.protect: invalid rectangle, severity or maxOverlap');
+  const m = g.getTransform();
+  QA.subjects.push({ m: [m.a, m.b, m.c, m.d, m.e, m.f], rect: [x, y, w, h],
+    name: String(o.name || 'subject'), severity: o.severity || 'warn', maxOverlap: o.maxOverlap ?? 0.01,
+    where: frameCanvas(g.canvas), entry: MV.curEntry ? MV.curEntry.i : -1, alpha: g.globalAlpha });
 };
 /**
  * Ownership: which texts are a box's own. A helper that draws a box AND the text that goes in it (a table and its
@@ -395,7 +410,7 @@ function outCtx() { return document.getElementById('mv').getContext('2d', { will
 function render(t, mode) {
   setContext(t);
   QA.on = true; QA.mode = mode;
-  if (mode === 'record') { QA.texts = []; QA.boxes = []; QA.offscreen = []; }
+  if (mode === 'record') { QA.texts = []; QA.boxes = []; QA.subjects = []; QA.offscreen = []; }
   MV.lastError = null;
   const c = outCtx();
   MV.noOverlay = mode === 'bare';                      // 'bare': the picture alone, no lyrics and no screen layer
@@ -443,6 +458,61 @@ function coverage(SA, SC, focus) {
 }
 function rnd(b) { return b.map(v => Math.round(v * 10) / 10); }
 
+// Glyph ink bounds catch even low-contrast text. The full/bare difference also catches
+// lyric plates and screen overlays; unlike lyric-cover, neither test needs scene edges.
+function subjectCoverage(subjects, texts, post, solo, M0, A, B) {
+  if (!subjects.length) return [];
+  const w = SMALL.w, h = SMALL.h, sx = W / w, sy = H / h;
+  const mask = mk(w, h).getContext('2d');
+  for (const o of texts) {
+    if (!o.tx.lyric || o.tx.alpha < 0.1 || (post.remapped && o.tx.where !== 'out')) continue;
+    if (o.tx.paint) {
+      // CSS rgba(...,0) does not change globalAlpha. Do not count invisible ink bounds.
+      mctx.clearRect(0, 0, 1, 1); mctx.fillStyle = o.tx.paint; mctx.fillRect(0, 0, 1, 1);
+      if (mctx.getImageData(0, 0, 1, 1).data[3] * o.tx.alpha < 25.5) continue;
+    }
+    mask.fillStyle = '#fff';
+    mask.beginPath();
+    o.q.forEach(([x, y], i) => i ? mask.lineTo(x / sx, y / sy) : mask.moveTo(x / sx, y / sy));
+    mask.closePath(); mask.fill();
+  }
+  const ink = mask.getImageData(0, 0, w, h).data;
+  const inside = (x, y, q) => {
+    let pos = false, neg = false;
+    for (let i = 0; i < 4; i++) {
+      const a = q[i], b = q[(i + 1) % 4], v = (b[0] - a[0]) * (y - a[1]) - (b[1] - a[1]) * (x - a[0]);
+      pos ||= v > 1e-6; neg ||= v < -1e-6;
+    }
+    return !(pos && neg);
+  };
+  return subjects.map(s => {
+    const M = full(s, M0), [x, y, rw, rh] = s.rect;
+    const q = [[x,y],[x+rw,y],[x+rw,y+rh],[x,y+rh]].map(([x,y]) => {
+      const p = M.transformPoint({x,y}); return [p.x,p.y];
+    });
+    const box = aabb(q), result = { name: s.name, entry: s.entry, severity: s.severity,
+      maxOverlap: s.maxOverlap, box: rnd(box), status: 'unverified' };
+    if (!s.where) return {...result, reason: 'offscreen declaration; declare on the final scene canvas'};
+    if (!solo) return {...result, reason: 'transition composite has no reliable region mapping'};
+    if (post.remapped && s.where !== 'out') return {...result, reason: 'non-affine scene remapping'};
+    if (s.alpha < 0.1) return {...result, reason: 'subject declaration is transparent'};
+    let pixels = 0, covered = 0, hit = [W,H,0,0];
+    for (let yy = Math.max(0, Math.floor(box[1]/sy)); yy < Math.min(h, Math.ceil(box[3]/sy)); yy++) {
+      for (let xx = Math.max(0, Math.floor(box[0]/sx)); xx < Math.min(w, Math.ceil(box[2]/sx)); xx++) {
+        if (!inside((xx+.5)*sx, (yy+.5)*sy, q)) continue;
+        pixels++;
+        const k = (yy*w+xx)*4;
+        if (ink[k+3] > 32 || Math.max(Math.abs(A[k]-B[k]), Math.abs(A[k+1]-B[k+1]), Math.abs(A[k+2]-B[k+2])) > 8) {
+          covered++; hit = [Math.min(hit[0],xx*sx), Math.min(hit[1],yy*sy), Math.max(hit[2],(xx+1)*sx), Math.max(hit[3],(yy+1)*sy)];
+        }
+      }
+    }
+    if (pixels < 4) return {...result, reason: 'region is outside the frame or too small at QA resolution'};
+    return {...result, status: 'measured', overlap: covered/pixels, pixels, coveredPixels: covered,
+      obstructionBox: covered ? rnd(hit) : null};
+  });
+}
+
 G.MV_QA = {
   /** the song's words: [{i, w, n, start, end, line, j, next}] — next = start of the following word in the line */
   words() {
@@ -463,16 +533,17 @@ G.MV_QA = {
     const c = render(t, 'record');
     const err = MV.lastError;
     const M0 = postMatrix(), post = Object.assign({}, MV.lastPost || {});
-    const texts = QA.texts, boxes = QA.boxes, offscreen = QA.offscreen;
+    const texts = QA.texts, boxes = QA.boxes, offscreen = QA.offscreen, subjects = QA.subjects;
     const focus = MV.frameFocus.map(f => { const p = f.screen ? { x: f.x, y: f.y } : M0.transformPoint({ x: f.x, y: f.y }); return { x: p.x, y: p.y, name: f.name, entry: f.entry ? f.entry.i : -1, screen: f.screen }; });
     const act = MV.activeAt(t), top = act[act.length - 1];
     const solo = act.length <= 1 || !(top.fadeIn && t < top.from + top.fadeIn);
     const A = ids.length || (opt && opt.touch) ? c.getImageData(0, 0, W, H).data : null;
-    const SA = opt && opt.touch && !post.remapped ? small(c).slice() : null;
+    const SA = (subjects.length || (opt && opt.touch && !post.remapped)) ? small(c).slice() : null;
     let B = null;
     if (ids.length && texts.some(x => x.lyric)) { const c2 = render(t, 'nolyric'); B = c2.getImageData(0, 0, W, H).data; }
     if (QA.debug) { QA.A = A; QA.B = B; }
-    const cover = SA ? coverage(SA, small(render(t, 'bare')), focus) : null;
+    const SB = SA ? small(render(t, 'bare')).slice() : null;
+    const cover = SA && !post.remapped ? coverage(SA, SB, focus) : null;
     const T = texts.map(tx => { const M = full(tx, M0), q = inkQuad(tx, M); return { tx, M, n: normMap(tx.s), q, box: aabb(q), px: fontPx(tx.font) * scaleOf(M) }; });
     const ws = MV.lyrics.words;
     const words = ids.map(i => {
@@ -514,7 +585,7 @@ G.MV_QA = {
         const q = [[x, y], [x + w, y], [x + w, y + h], [x, y + h]].map(([u, v]) => { const p = B.transformPoint({ x: u, y: v }); return [p.x, p.y]; });
         return { name: b.name, pad: b.pad, entry: b.entry, owner: b.owner, where: b.where, alpha: b.alpha, box: rnd(aabb(q)), rect: b.rect, m: [B.a, B.b, B.c, B.d, B.e, B.f] };
       }),
-      focus, words, cover,
+      focus, words, cover, subjects: subjectCoverage(subjects, T, post, solo, M0, SA, SB),
     };
   },
   /** how much the picture (lyrics left out) changes across times: share of 1/4-size pixels that moved, per step */

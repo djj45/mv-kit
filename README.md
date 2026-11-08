@@ -19,6 +19,7 @@ mv-kit/
                  align_lyrics.py（Whisper + 对齐 → 逐词时间），separate.py（可选，Demucs 分轨）
   tools/         render.py（导出视频 / 截图 / 拼板 / 检查 / qa / 角色定型图），qa.py（render.py qa：用真实渲染的帧量出唱到的词是否真的显示、字是否出框、主体是否出画、镜头动不动），new_project.py（新建项目），frames.py（把视频 / 静帧打包给 roto.js / illust.js），dreamina.py（用即梦画布 CLI 生成插画和图生视频片段），eyetrack.py（量帧包里眼睛每张画的开合和瞳孔位置），lightsoff.py（把插画里亮着的窗户涂掉并列出来，代码再一扇扇点亮），
                  lyric_timing.py（不含歌词文字的时间：data/timing.json，可以进 git）
+  recipes/       镜头配方库：路径显现、数值逐拍、错峰组装、局部跟随、同形转场（含最小源码与动态预览命令）
   template/      新项目模板：会动的歌词字幕 + 风格圣经模板 TREATMENT.md
   projects/      你的项目。anime-pdoom 是示例（10 秒二次元 demo），pigment-demo 是 pigment.js 的样张，lumen-demo 是 lumen.js 的样张，solid-demo 是 solid.js + sim.js 的样张（玻璃心形、光线步进晶格、百万沙粒克拉尼图形），field-demo 是三种"场"的样张（铁屑头尾相吸链成的磁力线、光线步进的极小曲面、没有领队的鸟群；三个镜头各一种调色板），roto-demo 是 roto.js 的样张（即梦素材 → 印刷赛璐璐），transition-demo 是转场的样张，kit-demo 是 camera.js / layout.js 和 qa 约定的样张（三个短镜头），act-demo 是 act.js、reads 和角色定型图的样张（原创角色 Pip，三个短镜头），pdoom-print 是 print.js 的示例（P(doom) 的 ASCII 打印稿版，全部代码绘制），pdoom-sign 是一轮出片流程的示例（P(doom) 做成工业安全须知：象形小人、警示牌、刻度盘；由 DeepSeek 按 docs/briefs/pdoom-sign 的施工图做出、qa 把关打磨四轮，全部代码绘制）
   docs/ENGINE.md 引擎 API 参考（写镜头时看）
@@ -58,7 +59,11 @@ uv run tools/render.py projects/my-song sheet --cuts
 uv run tools/render.py projects/my-song strip --t 40.2 --dur 1.2   # 关键动作：从 40.2 s 起每 0.2 s 一帧 → out/strip-0040.20.png
 uv run tools/render.py projects/my-song model          # 有角色时：定型图（每个视角、情绪、关键姿势一页）→ out/model-<名字>.png
 
-# 6. 导出
+# 6. 先审代表性动态样片，再导整片（区间由你的镜头表选择，见 docs/PILOT.md）
+uv run tools/render.py projects/my-song pilot --from 30 --to 36  # 带音乐，独立输出到 out/pilots/
+# 也可在 project.js 写 pilot: {from, to, reason}，然后直接运行 pilot
+
+# 7. 导出
 uv run tools/render.py projects/my-song                       # 1080p，project.js 里的 fps
 uv run tools/render.py projects/my-song --4k                  # 原生 4K（3840×2160，out/<标题>-2160p.mp4）：同一个项目，字和线按 4K 重新画
 uv run tools/render.py projects/my-song --samples 4           # 加运动模糊（慢 4 倍）
@@ -85,6 +90,70 @@ uv run tools/render.py projects/my-song --fresh               # 不用留下的�
 歌曲换了文件也会提示：`analyze_audio.py` 把歌曲的 sha256 记在 `data/audio.json`，渲染时发现项目里的歌不是分析时那一份（换了母带、片头静音不同），就会警告：所有切点和歌词都会整体错位。老项目用 `uv run analysis/analyze_audio.py projects/my-song --pin` 补记一次。
 
 模板项目开箱就能出一支"动态歌词"视频：背景随段落换色、随低音呼吸，歌词逐词点亮。之后按方案把 `scenes/` 里的镜头换成你的。
+
+## 镜头配方与动态样片
+
+[镜头配方库](recipes/README.md) 把动作次序、音乐绑定、停留时间、参数和失败条件放在同一张卡里；每张卡链接可运行的最小场景。先选配方、出定调帧，再制作代表性动态样片，最后扩展全片。样片流程见 [docs/PILOT.md](docs/PILOT.md)，已加入新项目的 `TREATMENT.md` 模板和提示词手册。
+
+```sh
+python3 projects/recipe-demo/make_audio.py              # 原创节拍练习音轨，无需外部歌曲
+open projects/recipe-demo/index.html                   # 五种配方的 24 秒练习
+uv run tools/render.py projects/recipe-demo pilot       # 默认 18–23 秒，包含同形推进转场
+```
+
+`pilot` 复用现有渲染器与分块缓存，默认要求音频，输出 MP4 和记录实际范围 / 参数的 JSON 到 `out/pilots/`。显式区间必须同时提供 `--from / --to`；静音研究用 `--noaudio`。渲染成功不代表审看通过，需要实际播放检查节奏、动作和文字。示例不含歌词，真实歌曲继续用原有歌词 QA。
+
+## 检查编码后的成片
+
+原有 `check / qa` 检查浏览器里的时间线、歌词与画面；新增 `filmcheck / sync` 解码最终 MP4，检查规格、黑场、静止、闪帧、音轨和关键事件的音画误差。用法与证据边界见 [docs/ENCODED-QA.md](docs/ENCODED-QA.md)。
+
+```sh
+uv run tools/render.py projects/my-song --verify   # 导出后运行成片、音画、字幕检查
+uv run tools/render.py projects/my-song filmcheck  # 单独扫描默认成片，无需浏览器
+uv run tools/render.py projects/my-song sync       # 回测 timeline 条目中 sync 标注的事件
+# 指定样片：追加 --file projects/my-song/out/pilots/<样片>.mp4
+```
+
+每次导出写 `<视频>.render.json`，记录实际范围、规格、输入版本和成片哈希。修改后拿旧视频回测会失败。报告在 `out/qa/encoded/`，与原有 QA 分开保存。退出码：通过 / 警告为 0，失败为 1，证据不足为 2；没有事件、没有可靠峰值或没有回执都不能当作音画通过。仅在声明事件的范围内得出结论，不替代完整带声审看。
+
+## 多音轨与逐镜交付
+
+用独立的 `project.soundtrack` JSON 管理 BGM、旁白、音效及字幕，详见 [docs/SOUND-DELIVERY.md](docs/SOUND-DELIVERY.md)。
+
+```sh
+uv run tools/render.py projects/my-song remix --verify  # 改声音后复制现有视频流，不启动浏览器
+uv run tools/render.py projects/my-song subtitles       # 仅更新 SRT/VTT 和回执，MP4 保持不变
+uv run tools/render.py projects/my-song package         # 原成片、逐镜视频、对齐 WAV、SRT/VTT、QA 报告
+```
+
+`remix` 要求画面依赖和成片回执匹配；普通导出也复用不受声音配置影响的块缓存。浏览器预览仍播放原歌曲，多轨效果请播放导出的样片。下面的 Demucs 分轨用于歌曲分析，与后期增加音轨用途不同。
+
+声音处理共用 `out/.audio-cache/`，只重做变化的轨道；发布前校验输入，失败回滚并支持进程中断恢复。仅改字幕会生成新的交付包版本，不需要重做音视频。
+
+逐镜交付另用 `out/.clip-cache/`：换混音或改字幕后复用已编码镜头。音画事件可通过 `audio: {track, sourceAt}` 指定旁白/音效轨，裁剪和循环时间按实际轨道映射，见 [音画回测说明](docs/ENCODED-QA.md)。
+
+完整逐镜交付采用已校验的源片副本和单次批量解码，逐镜缓存支持失败后续跑；全部命中时直接复用片段。完整 120 镜头回归及 720p 性能对比见 [声音与交付说明](docs/SOUND-DELIVERY.md)。
+
+四类缓存统一查看：`uv run tools/cachectl.py projects/recipe-demo`。支持容量与命中率统计、清理预览、按最近使用时间淘汰和活跃任务保护，见 [缓存管理与自动回归](docs/CACHE.md)。
+
+画面分块复用前核对完整性记录和内容摘要，损坏时只重建对应块；大素材也使用流式 SHA-256，避免同大小、同时间戳修改后误用旧画面。升级后的首次导出会重建旧分块。
+
+## 多轨审片与字幕 QA
+
+歌词不能压住脸、瞳孔等关键主体时，用 `MV.protect` 声明保护区域，现有 `qa` 会检测重叠并生成定位截图。该检查不依赖背景亮度；未标注镜头和无法映射的转场不会被当作通过，见 [主体遮挡 QA](docs/SUBJECT-QA.md)。
+
+```sh
+uv run tools/render.py projects/my-song review          # 生成离线审片页，打开输出的 index.html
+uv run tools/render.py projects/my-song subtitlecheck   # 字幕停留、速度、行宽、重叠检查
+```
+
+审片页播放最终 MP4 混音，支持缓存单轨试听、字幕叠加、逐帧步进和点击 QA 问题定位；样片也可用 `--file` 指定。自动检查保留待人工复核状态，详情见 [docs/REVIEW.md](docs/REVIEW.md)。
+
+审片页支持镜头搜索、状态筛选、复核进度、播放联动，以及逐镜备注、人工结论和版本绑定的 JSON 导入导出。新版可比较镜头／音轨／字幕差异，并将旧备注迁入只读参考；新版结论仍需重新确认。交付包可附带记录，并用 `uv run tools/verify_package.py /path/to/package` 在没有原工程的机器上独立校验，见 [验包说明](docs/PACKAGE-VERIFY.md)。
+
+画面逐帧摘要使用 `out/.review-cache/`，重复审片与视频流不变的声音重混可复用；通过 `cachectl --kind review` 管理。时间线可选稳定 `shot.id`，重命名或重排后仍能关联历史参考。差异可点击定位，并按变化镜头筛选或逐项跳转；同版本导入与历史迁移前自动保留一份草稿备份，支持撤销和导出恢复。
+
+支持当前帧／区间问题标注，逐条记录待处理、已修改、已复核及处理说明；未复核问题会阻止相关镜头和整片通过。时间标注随版本 2 审片 JSON 交付并独立验包，旧记录继续兼容。未提交的问题编辑和新问题区间会保存为独立本地草稿，刷新可恢复且不自动提交状态；问题列表支持搜索、当前镜头筛选及下一条待处理／已修改待复核导航。存储失败提示和恢复边界见 [审片文档](docs/REVIEW.md)。
 
 ## 可选：分轨让分析更准
 
@@ -162,7 +231,7 @@ uv run tools/render.py projects/anime-pdoom
 uv run python -B -m unittest discover -s tests -v
 ```
 
-覆盖检查命令的退出码、识别缓存失效与失败保护、模板时间线边界，以及导出帧率和运动模糊采样。`check` 遇到场景或浏览器错误时返回 1；时间线提示仍作为提示，不改变退出码。`--fps` 会在导出页初始化前生效，场景、QA 和运动模糊使用同一帧率。
+覆盖检查命令的退出码、识别缓存失效与失败保护、模板时间线边界，以及导出帧率和运动模糊采样。安装本地 FFmpeg / FFprobe 时还会跑真实编码的成片 / 音画回测正反例；缺少时该组明确跳过。`check` 遇到场景或浏览器错误时返回 1；时间线提示仍作为提示，不改变退出码。`--fps` 会在导出页初始化前生效，场景、QA 和运动模糊使用同一帧率。
 
 浏览器可用时，运行三个项目的实际渲染基线：
 
@@ -171,6 +240,8 @@ uv run python -B tests/render_baseline.py --out work/render-baseline
 ```
 
 默认检查 `kit-demo`、`field-demo` 和完整歌曲项目 `pdoom-sign`：每个镜头中间渲一帧，再倒序重渲并核对哈希，输出 `baseline.json` 和每个项目的三张代表帧。基线记录应在同一浏览器、字体和 GPU 环境下比较；此检查不替代整片 `render.py … qa`。
+
+仓库提供 GitHub Actions 工作流，提交到 GitHub 后可自动执行回归及真实浏览器测试；长项目测试覆盖 60 秒 / 120 镜头 / 8 音轨、中断续渲与声音修改后的画面缓存复用，详见 [docs/CACHE.md](docs/CACHE.md)。提交范围、全新环境安装、交付验证和兼容性说明见 [发布准备](docs/RELEASE.md)。
 
 ## 注意
 

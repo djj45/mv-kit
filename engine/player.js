@@ -20,6 +20,12 @@ MV.start = async function () {
       G.MV_PROJECT = { ...G.MV_PROJECT, fps };
     }
     await document.fonts.ready; await MV.setup();
+    const shotIds = new Set();
+    for (const e of MV.entries) if (Object.hasOwn(e, 'id')) {
+      if (typeof e.id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(e.id) || shotIds.has(e.id))
+        throw new Error('shot.id must be a unique 1–128 character identifier (letters, digits, . _ : -)');
+      shotIds.add(e.id);
+    }
   }
   catch (err) { fatal(err); return; }
   cv.width = Math.round(W * MV.scale); cv.height = Math.round(H * MV.scale);   // the output: design units × MV.scale pixels
@@ -35,8 +41,9 @@ MV.start = async function () {
     G.MV_EXPORT = {
       model: name => { MV.lastError = null; return MV.modelSheet(name).toDataURL('image/png'); },
       info: { title: P.title, from: P.from, to: P.to, fps: P.fps, width: cv.width, height: cv.height, design: [W, H], scale: MV.scale, audio: P.audio, warnings: MV.warnings, lint,
-              shots: MV.entries.map(e => ({ name: e.name, scene: e.scene, from: e.from, to: e.to, until: e.until, fadeIn: e.fadeIn || 0,
-                                             reads: e.reads, src: MV.sceneSrc[e.scene] || null })),
+              shots: MV.entries.map(e => ({ ...(Object.hasOwn(e, 'id') ? { id: e.id } : {}), name: e.name, scene: e.scene, from: e.from, to: e.to, until: e.until, fadeIn: e.fadeIn || 0,
+                                             reads: e.reads, sync: e.sync || [], src: MV.sceneSrc[e.scene] || null })),
+              subtitles: MV.lyrics.lines.filter(l => l.words.length).map(l => ({ start: l.start, end: l.end, text: l.text || l.words.map(w => w.w).join(' ') })),
               sceneSrc: MV.sceneSrc, models: Object.keys(MV.models) },
       frame(t, samples = 1, shutter = 0.5, type = 'image/png', quality = 0.95) { MV.lastError = null; MV.renderAt(ctx, t, { samples, shutter }); return cv.toDataURL(type, quality); },
       error: () => MV.lastError,

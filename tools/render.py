@@ -4,6 +4,11 @@
   uv run tools/render.py projects/my-song                   # video -> projects/my-song/out/<title>.mp4
   uv run tools/render.py projects/my-song --4k              # the same film at 3840x2160 -> out/<title>-2160p.mp4
   uv run tools/render.py projects/my-song video --from 30 --to 45 --samples 4
+  uv run tools/render.py projects/my-song pilot --from 30 --to 36  # audible excerpt -> out/pilots/, never the film
+  uv run tools/render.py projects/my-song pilot             # range from project.pilot {from, to, reason}
+  uv run tools/render.py projects/my-song filmcheck         # inspect the encoded film (no browser)
+  uv run tools/render.py projects/my-song sync              # measure declared events in the encoded film
+  uv run tools/render.py projects/my-song --verify          # export, then run both encoded checks
   uv run tools/render.py projects/my-song stills --t 12.5,20,31.2
   uv run tools/render.py projects/my-song sheet --cuts      # 3 frames per shot (start / middle / end)
   uv run tools/render.py projects/my-song sheet --n 24      # 24 evenly spaced frames
@@ -51,7 +56,10 @@ from mvproject import KIT, check_audio, load_project  # noqa: E402
 
 ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 ap.add_argument('project')
-ap.add_argument('mode', nargs='?', default='video', choices=['video', 'stills', 'sheet', 'strip', 'check', 'qa', 'model'])
+ap.add_argument('mode', nargs='?', default='video', choices=['video', 'pilot', 'stills', 'sheet', 'strip', 'check', 'qa', 'model', 'filmcheck', 'sync', 'remix', 'package', 'subtitles', 'subtitlecheck', 'review'])
+ap.add_argument('--review-record', help='package: attach a version-matched human review JSON')
+ap.add_argument('--file', help='encoded checks / remix / package / subtitles / review: existing MP4 (default: full-film output)')
+ap.add_argument('--verify', action='store_true', help='video / pilot / remix: run filmcheck and sync after export')
 ap.add_argument('--from', dest='t0', type=float)
 ap.add_argument('--to', dest='t1', type=float)
 ap.add_argument('--fps', type=int)
@@ -79,6 +87,18 @@ ap.add_argument('--out')
 ap.add_argument('--scale', type=float, default=1.0, help='video / stills / sheet / strip: render K x the design resolution (2 = 4K for 1920x1080)')
 ap.add_argument('--4k', dest='uhd', action='store_true', help='same as --scale 2 (3840x2160 from a 1920x1080 project)')
 a = ap.parse_args()
+if a.review_record and a.mode != 'package':
+    ap.error('--review-record is only for package')
+if a.file and a.mode not in ('filmcheck', 'sync', 'remix', 'package', 'subtitles', 'subtitlecheck', 'review'):
+    ap.error('--file is only for encoded checks / remix / package / subtitles / review')
+if a.verify and a.mode not in ('video', 'pilot', 'remix'):
+    ap.error('--verify is only for video / pilot / remix')
+if a.mode in ('remix', 'package', 'subtitles', 'review') and (a.t0 is not None or a.t1 is not None or a.fps is not None):
+    ap.error('remix/package/subtitles/review preserve the encoded range/fps; render a pilot for another range')
+if a.mode in ('package', 'subtitles', 'review') and a.noaudio:
+    ap.error('package/subtitles/review preserve existing audio; use remix --noaudio for a silent version')
+if a.mode in ('filmcheck', 'sync', 'subtitlecheck') and (a.t0 is not None or a.t1 is not None or a.fps is not None or a.out is not None):
+    ap.error('encoded checks read range/fps from the render receipt; select the MP4 with --file')
 if a.uhd:
     a.scale = 2.0
 if a.scale <= 0:
@@ -182,10 +202,37 @@ def report_browser_errors(errors):
 
 
 def main():
+    if a.mode in ('filmcheck', 'sync', 'remix', 'package', 'subtitles', 'subtitlecheck', 'review'):
+        import delivery
+        import filmqa
+        import syncqa
+        import captions
+        height = round(cfg.get('height', 1080) * a.scale)
+        path = Path(a.file).expanduser().resolve() if a.file else OUT / (cfg.get('title', 'mv').replace(' ', '-') + (f'-{height}p' if a.scale != 1 else '') + '.mp4')
+        if a.mode in ('remix', 'package', 'subtitles', 'review'):
+            import handoff
+            try:
+                if a.mode == 'package':
+                    handoff.package(cfg, path, a.out, a.review_record)
+                elif a.mode == 'subtitles':
+                    handoff.refresh_subtitles(cfg, path, a.out)
+                elif a.mode == 'review':
+                    import review
+                    review.build(cfg, path, a.out)
+                else:
+                    path = handoff.remix(cfg, path, a.out, a.noaudio)
+                    if a.verify:
+                        codes = [delivery.exit_code(m.inspect(cfg, path)) for m in (filmqa, syncqa, captions)]
+                        sys.exit(1 if 1 in codes else 2 if 2 in codes else 0)
+            except (ValueError, OSError, KeyError, TypeError) as exc:
+                sys.exit(str(exc))
+            return
+        report = {'filmcheck': filmqa, 'sync': syncqa, 'subtitlecheck': captions}[a.mode].inspect(cfg, path)
+        sys.exit(delivery.exit_code(report))
     from playwright.sync_api import sync_playwright
     for w in check_audio(cfg):
         print('warning:', w)
-    if a.mode == 'video':
+    if a.mode in ('video', 'pilot'):
         return video()
     errors, scene_errors = [], {}
     with sync_playwright() as p:
@@ -351,15 +398,11 @@ def auto_workers():
 
 SKIP_DIRS = {'out', 'stems', 'audio', '.git', 'node_modules', 'dreamina', '__pycache__'}
 SKIP_EXT = {'.md', '.txt', '.mp3', '.wav', '.m4a', '.flac', '.aac', '.ogg', '.mp4', '.mov', '.webm', '.mkv', '.py', '.pyc'}
-BIG = 16 << 20          # files above this are keyed on size + mtime instead of their content
-
 
 def file_key(path):
-    st = path.stat()
-    if st.st_size > BIG:
-        return f'{st.st_size}:{st.st_mtime_ns}'
-    import hashlib
-    return hashlib.sha1(path.read_bytes()).hexdigest()
+    # Stream every source, including large assets. Size/mtime are not content identity.
+    from mvproject import fingerprint
+    return fingerprint(path)['sha256']
 
 
 def url_path(src):
@@ -408,6 +451,11 @@ def input_keys(info):
         if p.exists():
             files.add(p)
     files = {p.resolve() for p in files if p.exists()}
+    # Sound-only edits do not affect Canvas frames. Explicit picture dependencies win.
+    import soundtrack
+    files.discard(soundtrack.sidecar(cfg))
+    files = {p for p in files if p.suffix.lower() not in soundtrack.AUDIO_EXT}
+    files |= {(PD / rel).resolve() for rel in cfg.get('verifyInputs', [])}
     text = {p: p.read_text(encoding='utf-8', errors='replace') for p in scene_files if p in files}
     scene_files = set(text)
     names = {p: top_names(t) for p, t in text.items()}
@@ -436,15 +484,16 @@ def input_keys(info):
                     d.add(o)
                     todo.append(o)
         deps[p] = d
+    content_keys = {p: file_key(p) for p in files}
     h = hashlib.sha1()
     for p in sorted(shared):
-        h.update(f'{p.relative_to(KIT) if KIT in p.parents else p}={file_key(p)}\n'.encode())
+        h.update(f'{p.relative_to(KIT) if KIT in p.parents else p}={content_keys[p]}\n'.encode())
     shared_key = h.hexdigest()
     keys = {}
     for p, d in deps.items():
         h = hashlib.sha1()
         for q in sorted(d):
-            h.update(f'{q.name}={file_key(q)}\n'.encode())
+            h.update(f'{q.name}={content_keys[q]}\n'.encode())
         keys[p] = h.hexdigest()
     return shared_key, keys
 
@@ -471,6 +520,12 @@ def plan_chunks(info, t0, n, fps):
 
 
 def video():
+    import cachectl
+    with cachectl.lease(OUT / '.chunks'):
+        _video()
+
+
+def _video():
     """Chunked, resumable export: a queue of short chunks, N workers (each a browser + an x264 encoder), kept chunks
     reused; then the chunks are joined losslessly and muxed with the song."""
     from playwright.sync_api import sync_playwright
@@ -490,14 +545,54 @@ def video():
     for w in info['warnings']:
         print('warning:', w)
     fps = a.fps or info['fps']
+    info['fps'] = fps
     t0 = info['from'] if a.t0 is None else a.t0
     t1 = info['to'] if a.t1 is None else a.t1
+    pilot_plan = None
+    film_path = OUT / (f"{cfg.get('title', 'mv').replace(' ', '-')}" + (f"-{info['height']}p" if a.scale != 1 else '') + '.mp4')
+    out = Path(a.out) if a.out else film_path
+    if a.mode == 'pilot':
+        import pilot
+        try:
+            pilot_plan = pilot.select(cfg, dict(info, fps=fps), a.t0, a.t1)
+            base_film_path = OUT / (cfg.get('title', 'mv').replace(' ', '-') + '.mp4')
+            out = pilot.output_path(OUT, pilot_plan, a.out, film_path, base_film_path)
+            if not a.noaudio and not cfg.get('soundtrack') and (not info.get('audio') or not (PD / info['audio']).is_file()):
+                raise ValueError('pilot needs the project audio; prepare it first, or explicitly use --noaudio for a silent study')
+        except ValueError as e:
+            first.close(); p0.stop()
+            sys.exit(str(e))
+        t0, t1 = pilot_plan['from'], pilot_plan['to']
+        if not 3 <= t1 - t0 <= 10:
+            print('note: representative pilots are usually 3–10 s; leave room for an action, its hold and a transition')
+        if len(pilot_plan['shots']) < 2:
+            print('note: this pilot contains one shot; also review a range spanning its transition before expanding the film')
+        if pilot_plan['reason']:
+            print('pilot selection:', pilot_plan['reason'])
     n = round((t1 - t0) * fps)
     if n <= 0:
         first.close(); p0.stop()
         sys.exit('nothing to render: --to must be after --from')
 
-    out = Path(a.out) if a.out else OUT / (f"{cfg.get('title', 'mv').replace(' ', '-')}" + (f"-{info['height']}p" if a.scale != 1 else '') + '.mp4')
+    import delivery
+    import soundtrack
+    import publication
+    try:
+        publication.recover(out)
+        output_snapshot = publication.snapshot(out)
+        delivery.events_of(info)  # reject malformed event declarations before rendering
+        source_revision = delivery.revision(cfg, info, out)
+        info['_soundtrack'] = soundtrack.plan(cfg, info, t0, t0 + n / fps, a.noaudio)
+        if pilot_plan or a.t1 is not None:
+            info['_soundtrack']['fadeOut'] = 0.2
+        if pilot_plan and not a.noaudio and not info['_soundtrack']['tracks']:
+            raise ValueError('pilot needs an audible track in its range, or explicit --noaudio')
+        info['_visualRevision'] = delivery.revision(cfg, info, out, visual=True)
+        info['_audioRevision'] = soundtrack.audio_revision(info['_soundtrack'])
+    except (ValueError, OSError) as e:
+        first.close(); p0.stop()
+        sys.exit(str(e))
+
     out.parent.mkdir(parents=True, exist_ok=True)
     cache = OUT / '.chunks'
     cache.mkdir(parents=True, exist_ok=True)
@@ -510,9 +605,19 @@ def video():
         except PermissionError:
             pass
     skey, chunks = plan_chunks(info, t0, n, fps)
-    have = {f.name for f in cache.glob(f'{skey}-*.mp4')}
-    todo = [c for c in chunks if a.fresh or c[2] not in have]
+    import chunkcache
+    specs = {name: chunkcache.specification(s, e, fps, info['width'], info['height'])
+             for s, e, name, _ in chunks}
+    have = {name for _, _, name, _ in chunks
+            if not a.fresh and chunkcache.reusable(cache / name, specs[name])}
+    todo = [c for c in chunks if c[2] not in have]
+    invalid = sum((cache / c[2]).exists() or chunkcache.metadata_path(cache / c[2]).exists()
+                  for c in todo) if not a.fresh else 0
+    if invalid:
+        print(f'chunk cache: rebuilding {invalid} unverified or damaged chunk(s)')
     reused = len(chunks) - len(todo)
+    import cachectl
+    cachectl.record(cache, [c[2] for c in chunks if c not in todo], True)
 
     # The frames are sRGB. Convert them with the BT.709 matrix and say so in the file: left untagged (or tagged with
     # JPEG's BT.601 matrix), players and upload transcoders that assume BT.709 for HD shift the colours (saturated
@@ -559,9 +664,13 @@ def video():
         try:
             if ff.wait() != 0:
                 raise RuntimeError(f'ffmpeg failed on frames {s}–{e}')
-            os.replace(tmp(name), cache / name)
             if errs:
-                errored.add(name)                        # in this video, but not kept: the next export renders it again
+                errored.add(name)
+                chunkcache.discard(cache / name)
+            else:
+                chunkcache.publish(tmp(name), cache / name, specs[name])
+                with lock:
+                    cachectl.record(cache, [name], False)
         except Exception as ex:  # noqa: BLE001 — report and stop the workers
             if not stop.is_set():
                 failures.append(f'encoder of frames {s}–{e}: {ex}')
@@ -658,47 +767,62 @@ def video():
         for sig_, h in handlers.items():
             signal.signal(sig_, h)
         if failures:
-            kept = sum((cache / c[2]).exists() for c in chunks)
+            kept = sum(chunkcache.reusable(cache / c[2], specs[c[2]]) for c in chunks)
             print('RENDER STOPPED:' if failures == ['interrupted'] else 'RENDER FAILED:', *failures, sep='\n  ')
             again = 'run it again without --fresh' if a.fresh else 'run the same command again'
             print(f'{kept} of {len(chunks)} chunks are done and kept in {cache}: {again} to go on from there')
             report_browser_errors(errors)
             sys.exit(130 if failures == ['interrupted'] else 1)
+        if errors or scene_errors:
+            for name in errored:
+                chunkcache.discard(cache / name)
+            report_browser_errors(errors)
+            sys.exit('RENDER FAILED: render errors; previous output has been preserved')
         lst = cache / f'.list-{os.getpid()}.txt'
         lst.write_text(''.join(f"file '{(cache / c[2]).as_posix()}'\n" for c in chunks))
-        cmd = ['ffmpeg', '-y', '-v', 'error', '-f', 'concat', '-safe', '0', '-i', str(lst)]
-        audio = (PD / info['audio']).resolve() if info.get('audio') else None
-        fo = float(cfg.get('audioFadeOut', 0.2)) if a.t1 is None else 0.2  # project.audioFadeOut: seconds of fade at the end
-        mux = bool(audio and audio.exists() and not a.noaudio)
-        print(f"joining {len(chunks)} chunk{'s' if len(chunks) > 1 else ''}{' and the song' if mux else ''} (no re-encode)…", flush=True)
-        if mux:
-            cmd += ['-ss', f'{t0:.3f}', '-t', f'{n / fps:.3f}', '-i', str(audio), '-map', '0:v', '-map', '1:a',
-                    '-af', f'afade=t=in:d=0.02,afade=t=out:st={max(0, n / fps - fo):.3f}:d={fo:.3f}', '-c:a', 'aac', '-b:a', '256k']
-        cmd += ['-c:v', 'copy', '-movflags', '+faststart', str(out)]
+        print(f'joining {len(chunks)} chunks and mixing {len(info["_soundtrack"]["tracks"])} audio tracks (video stream copy)…', flush=True)
         try:
-            subprocess.run(cmd, check=True)
+            import handoff
+            receipt = handoff.export(cfg, out, ['-f', 'concat', '-safe', '0', '-i', str(lst)], info,
+                                     t0, n, a, source_revision, [*errors, *scene_errors.values()], output_snapshot)
+        except (ValueError, OSError) as exc:
+            sys.exit(str(exc))
         finally:
             lst.unlink(missing_ok=True)
+        if pilot_plan:
+            pilot.write_receipt(out, pilot_plan, info, a, info['_soundtrack']['syncSource'])
         el = time.time() - start
         print(f'wrote {out}  ({el:.0f} s' + (f', {nframes / el:.1f} frames/s' if nframes and el else '') + ')')
         report_browser_errors(errors)
         # keep the cache tidy: chunks with a scene error are not reused; older versions of these chunks (same settings,
         # same start, other inputs) are superseded
         for name in errored:
-            (cache / name).unlink(missing_ok=True)
+            chunkcache.discard(cache / name)
         current = {c[2] for c in chunks}
         starts = {c[2].split('-')[1] for c in chunks}
         for f in cache.glob(f'{skey}-*.mp4'):
-            if f.name not in current and f.name.split('-')[1] in starts:
-                f.unlink(missing_ok=True)
+            if (not f.is_symlink() and cachectl.PATTERNS['chunks'].fullmatch(f.name) and
+                    f.name not in current and f.name.split('-')[1] in starts):
+                chunkcache.discard(f)
         if errored:
-            print(f'{len(errored)} chunk(s) had scene errors: they are in the video but not kept')
+            print(f'{len(errored)} chunk(s) had scene errors and were discarded')
         if a.clean:
-            shutil.rmtree(cache, ignore_errors=True)
+            # Only owned files; the process lease protects this cleanup too.
+            stats = cachectl.read_stats(cache)
+            entries, _ = cachectl.inventory(cache, 'chunks', stats)
+            cachectl.remove_entries(cache, entries, stats)
         else:
             size = sum(f.stat().st_size for f in cache.glob('*.mp4'))
             print(f'chunks kept in {cache} ({size / 1e6:.0f} MB): the next export re-renders only the shots you changed '
                   f'(--fresh renders everything, --clean deletes them after the export)')
+        if a.verify:
+            import filmqa
+            import syncqa
+            import captions
+            reports = [m.inspect(cfg, out) for m in (filmqa, syncqa, captions)]
+            codes = [delivery.exit_code(report) for report in reports]
+            if any(codes):
+                sys.exit(1 if 1 in codes else 2)
     finally:
         stop.set()
         drop_tmp()

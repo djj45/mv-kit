@@ -1,0 +1,40 @@
+name: Regression
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      MV_ANGLE: default
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: uv sync --locked --python 3.12
+      - run: uv run playwright install --with-deps chromium
+      - name: Python, JavaScript and encoded media regressions
+        run: uv run python -B -m unittest discover -s tests -v
+      - name: Real browser review interactions
+        run: uv run python tests/review_browser.py --out artifacts/review
+      - name: Subject protection and lyric occlusion
+        run: uv run python tests/subject_browser.py --out artifacts/subject
+      - name: Long render and interrupted resume
+        run: uv run python tests/render_browser.py --out artifacts/render
+      - name: Complete delivery, resume and 720p comparison
+        run: uv run python tests/delivery_regression.py --out artifacts/delivery --performance
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-regression
+          path: artifacts/
+          retention-days: 7

@@ -24,7 +24,7 @@
    - 歌词字号最大和最小差 3 倍以上；至少三成的句子不在底部横带；至少【2】个只有歌词的画面
    - 每个镜头写清事件（首帧到尾帧变了什么）和 reads（观众依次要看懂什么、眼睛在哪个 MV.focus，每条至少 0.6 s），写进 timeline 的 reads
    - 有角色：先写角色 lib（kits/act.js 驱动），MV.model 登记定型图，render.py model 出图，自己打开看各视角对齐、表情读得出来，再写镜头；表情变化用 ACT.emotions，群体用 ACT.vary 错开
-4. 写 timeline.js 和镜头。check 不能有 read 提示。每写完一个镜头：sheet --cuts 看图（每镜第一帧不能是上一镜的句子，也不能是空画面），关键动作出 strip --step 0.083 逐帧看，再 qa --from 镜头起 --to 镜头止，打开 out/qa/ 的截图，错误清零再写下一个；one-speed 和 read-unled 也要处理（镜头里有快有停、read 开始时眼睛在它上面）。
+4. 先读 recipes/README.md，把配方 ID 和改动记进镜头表。选代表性动作 + 一次衔接（通常 3–6 秒，复杂段可到 10 秒），按 docs/PILOT.md 先出定调帧和带音乐的 pilot 样片，自行播放审看后再铺开全片，不中途追加审批。写 timeline.js 和镜头。check 不能有 read 提示。每写完一个镜头：sheet --cuts 看图（每镜第一帧不能是上一镜的句子，也不能是空画面），关键动作出 strip --step 0.083 逐帧看，再 qa --from 镜头起 --to 镜头止，打开 out/qa/ 的截图，错误清零再写下一个；one-speed 和 read-unled 也要处理（镜头里有快有停、read 开始时眼睛在它上面）。
 5. 整片 qa 零错误；警告逐条处理，保留的写进 TREATMENT（哪一条、为什么）。最后给我导出命令。
 完成时告诉我：qa 的错误数 / 警告数、保留了哪些警告和理由、你最没把握的三个镜头（我先看那三个）。
 ```
@@ -57,11 +57,15 @@
 
 小贴士：想参考某部作品或某个角色时，写它的**画风特征**（线条、配色、光影、表情、镜头语言），框架会保持原创角色设计。
 
-## 2. 时间线和第一个镜头
+## 2. 时间线和代表性动态样片
 
 ```
 方案确认。按镜头表写 timeline.js（切点按歌词内容和节拍算），
-先实现第一个镜头【镜头名】，出一张 sheet --cuts 拼板，你自己看过没问题再发给我。
+先读 recipes/README.md，选择适合的镜头配方；实现最能代表画风的【镜头名】和一次衔接，
+把动作预备、落点、阅读停留安排进 3–6 秒（必要时到 10 秒）。
+先用静帧确认构图，局部 qa 后运行 render.py projects/<项目> pilot --from … --to …，
+给我可播放、带音乐的样片和选择理由。不要用静帧拼板代替视频。
+我确认样片后，再铺开其余镜头。
 ```
 
 ## 3. 逐个镜头推进
@@ -92,6 +96,8 @@
 全片出一张 sheet --cuts 拼板，逐个镜头检查后导出 1080p 视频【加运动模糊 --samples 4】，放到项目的 out/ 里。
 ```
 
+成片导出时加 `--verify`。在 timeline 的 `sync` 中标注少量关键事件，时间与动作共用歌词 / 拍点；`filmcheck` 扫最终 MP4，`sync` 回测实际音画落点。按 `docs/ENCODED-QA.md` 处理报告：失败先修，证据不足明确说明，不能以进程结束或文件存在声称通过。
+
 ## 6. 把好用的东西沉淀下来
 
 ```
@@ -102,6 +108,10 @@
 ---
 
 ## 常见问题
+
+- **歌词遮住主体**：按 `docs/SUBJECT-QA.md` 用 `MV.protect` 标注当前可见的脸、瞳孔等关键区域，再运行现有 `qa`。检查报告中的 `subject-overlap` 截图和 `subjectProtection` 覆盖情况；未标注镜头或转场未验证不能当作无遮挡通过。改变构图或歌词位置解决问题，不通过关闭检查或扩大容差消除提示。
+
+- **只改配音、音乐、音效或导出字幕**：按 `docs/SOUND-DELIVERY.md` 配置 `project.soundtrack`，修改 sidecar 后用 `render.py projects/<项目> remix --verify`。画面冻结后用 `package` 交付逐镜 MP4、对齐 WAV、SRT/VTT 和 QA。浏览器预览仍是原歌曲，多轨请播放导出 MP4。
 
 - **歌词时间不准**：`uv run tools/tune_lyrics.py projects/<项目>` 打开校准工具，对着频谱把每个字的竖线拖到刚发声的地方，`⌘S` 保存（自动写进 `data/lyrics_fix.json` 并重新对齐）。也可以在预览里按 `d` 看时间，手写 `lyrics_fix.json` 再跑 `align_lyrics.py`。
 - **小节头错位**：`analyze_audio.py … --downbeat-shift 1`（1 到 3 都试试）。

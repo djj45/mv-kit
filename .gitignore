@@ -6,6 +6,8 @@ projects/*/data/whisper_words.json
 projects/*/data/whisper_words.meta.json
 projects/*/data/audio_qa.png
 .DS_Store
+# Local outputs from the same regression commands used by CI.
+/artifacts/
 
 # Songs and their lyrics belong to their authors. Keep them on your own machine only: copy the song into
 # projects/<name>/audio/ and write projects/<name>/lyrics.txt locally. Every file that carries the lyric text is
